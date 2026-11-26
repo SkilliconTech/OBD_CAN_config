@@ -1,0 +1,1725 @@
+import os
+import json
+import copy
+
+from PySide6.QtCore import Qt, QSize, QUrl, QTimer,QFile,QEvent, QRect, Signal
+from home_button import HomeButton
+
+from PySide6.QtGui import (
+    QFont,
+    QIcon,
+    QColor,
+    QAction,
+    QDesktopServices,
+    QShortcut,
+    QKeySequence,
+    QPainter
+)
+
+from PySide6.QtWidgets import (
+    QMainWindow,
+    QWidget,
+    QLabel,
+    QPushButton,
+    QFrame,
+    QListWidget,
+    QListWidgetItem,
+    QHBoxLayout,
+    QVBoxLayout,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QToolBar,
+    QToolButton,
+    QFileDialog,
+    QMessageBox,
+    QMenu,
+    QMenuBar,
+    QGraphicsDropShadowEffect,
+    QStackedWidget,
+    QSizePolicy,
+    QStackedWidget,
+    QSizePolicy,
+    QStyledItemDelegate,
+        QSizePolicy,
+    QStyledItemDelegate,
+    QStyle
+)
+
+
+from can_tool.models.constants import (
+    DEFAULT_CLASSIC_CAN,
+    DEFAULT_CANFD,
+    PROJECT_EXT,
+    PROJECT_FILTER,
+    JSON_FILTER,
+    LOG_PAGES
+)
+
+from can_tool.models.config_model import default_log_config
+
+from can_tool.services.config_validator import (
+    validate_log_config
+)
+from can_tool.services.config_version import CURRENT_CONFIG_VERSION
+
+from can_tool.services.config_repository import (
+    save_json,
+    load_json
+)
+
+from can_tool.resources.theme import (
+    LIGHT,
+    DARK,
+    RADIUS_SM,
+    RADIUS_LG,
+    FONT_FAMILY
+)
+
+from can_tool.resources.icons import (
+    tinted_icon,
+    make_theme_icon
+)
+
+from can_tool.resources.logo_widget import LogoWidget
+from can_tool.resources.skillicon_logo_data import skillicon_logo_icon
+from can_tool.resources.trash_icon_data import trash_pixmap
+
+from can_tool.views.classic_can_dialog import ClassicCANSettingsDialog
+from can_tool.views.canfd_dialog import CANFDSettingsDialog
+from can_tool.views.log_config_widget import LogConfigWidget
+from can_tool.views.tree_delegate import ModernTreeDelegate
+from can_tool.app.controller import AppController
+from can_tool.services.config_repository import JsonConfigurationRepository
+from can_tool.views.slide_switch import SlideSwitch
+
+
+class NewFileDelegate(QStyledItemDelegate):
+    """Row height, 'new file' typing box, and the trash icon on the
+    selected row of the imported files list."""
+
+    ROW_HEIGHT = 34          # thickness of the blue band
+    ICON_SIZE = 15           # trash icon size
+    ICON_RIGHT_GAP = 14      # distance of the icon from the right edge
+    
+
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        size.setHeight(self.ROW_HEIGHT)
+        return size
+
+    def updateEditorGeometry(self, editor, option, index):
+        editor.setGeometry(option.rect.adjusted(2, 3, -60, -3))
+
+    @classmethod
+    def trash_rect(cls, row_rect):
+        s = cls.ICON_SIZE
+        return QRect(
+            row_rect.right() - cls.ICON_RIGHT_GAP - s,
+            row_rect.center().y() - s // 2 + 1,
+            s, s
+        )
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        # icon only on the selected row of a real (saved/imported) file
+        if (option.state & QStyle.State_Selected) and index.data(Qt.UserRole):
+            painter.save()
+            painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+            painter.drawPixmap(self.trash_rect(option.rect), trash_pixmap())
+            painter.restore()
+
+class ConfigurationTool(QMainWindow):
+    home_requested = Signal()
+    
+    @property
+    def classic_can_settings(self):
+        return self.controller.get_classic_can()
+
+    @classic_can_settings.setter
+    def classic_can_settings(self, settings):
+        self.controller.update_classic_can(settings)
+        self._refresh_mode_display()
+
+    
+    @property
+    def canfd_settings(self):
+        return self.controller.get_canfd()
+
+    @canfd_settings.setter
+    def canfd_settings(self, settings):
+        self.controller.update_canfd(settings)
+        self._refresh_mode_display()
+
+
+    def __init__(self):
+        super().__init__()
+        self.controller = AppController(
+        repository=JsonConfigurationRepository()
+        )
+
+        self.dark_mode = False
+        self.current_file_path = None      # file used by Save / Ctrl+S
+        # Classic CAN runtime configuration/state
+        self.classic_can_settings = {
+            "bitrate": "500.000 kbits/s",
+            "sampling_point": "75%",
+            "sjw": "1",
+            "enabled": False,
+        }
+        self.classic_can_default_settings = dict(
+            self.classic_can_settings
+        )
+        self.classic_can_default_all_settings = dict(
+            self.classic_can_settings
+        )
+        self.classic_can_all_settings = dict(
+            self.classic_can_settings
+        )
+        self.classic_can_enabled = False
+        self.canfd_settings = dict(DEFAULT_CANFD)
+        self.canfd_settings = self.controller.get_canfd()
+
+        self.setWindowTitle("Configuration Tool")
+        self.resize(1400, 950)
+        print(self.screen().availableGeometry())
+
+        # ------------------------------------------------------------------
+        # Toolbar (New / Save / Import)
+        # ------------------------------------------------------------------
+        self._create_toolbar()
+
+        # ------------------------------------------------------------------
+        # Central layout
+        # ------------------------------------------------------------------
+        root = QWidget()
+        self.setCentralWidget(root)
+
+        root_layout = QHBoxLayout(root)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        # ---------------- Left sidebar ----------------
+        self.sidebar = QFrame()
+        self.sidebar.setObjectName("sidebar")
+        self.sidebar.setFixedWidth(300)
+        self.sidebar.setAttribute(
+            Qt.WA_StyledBackground,
+            True
+        )
+
+        sidebar_layout = QVBoxLayout(self.sidebar)
+        sidebar_layout.setContentsMargins(
+            20,
+            24,
+            20,
+            24
+        )
+        sidebar_layout.setSpacing(0)
+
+        brand_row = QHBoxLayout()
+        brand_row.setSpacing(10)
+
+        # --------------------------------------------------------------
+        # Configuration Tool text
+        # --------------------------------------------------------------
+        self.brand_label = QLabel(
+            "Configuration Tool"
+        )
+
+        brand_font = QFont()
+        brand_font.setFamilies(["Segoe UI Variable Display", "Segoe UI", "Arial"])
+        brand_font.setPointSizeF(12.5)
+        brand_font.setWeight(QFont.DemiBold)
+
+        self.brand_label.setFont(
+            brand_font
+        )
+
+        brand_row.addWidget(
+            self.brand_label
+        )
+
+        brand_row.addStretch(1)
+
+        sidebar_layout.addLayout(
+            brand_row
+        )
+        sidebar_layout.addSpacing(14)
+        section_font = QFont()
+        section_font.setFamilies(["Segoe UI Variable Text", "Segoe UI", "Arial"])
+        section_font.setPointSizeF(10.5)
+        section_font.setWeight(QFont.DemiBold)
+
+        # ================================================================
+        # SECTION 1: Imported Files  (own frame + own layout)
+        # ================================================================
+        self.imported_section = QFrame()
+        self.imported_section.setObjectName("importedSection")
+        self.imported_section.setAttribute(Qt.WA_StyledBackground, True)
+        imported_layout = QVBoxLayout(self.imported_section)
+        imported_layout.setContentsMargins(0, 0, 0, 0)
+        imported_layout.setSpacing(8)
+
+        self.imported_label = QLabel("IMPORTED FILES")
+        self.imported_label.setFont(section_font)
+        imported_layout.addWidget(self.imported_label)
+
+        self.imported_list = QListWidget()
+        self.imported_list.setObjectName("importedList")
+        self.imported_list.setUniformItemSizes(True)
+        self.imported_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.imported_list.setSpacing(0)
+        self.imported_list.setMinimumHeight(110)
+        self.imported_list.setMaximumHeight(150)
+        self.imported_list.itemClicked.connect(self.on_imported_file_clicked)
+        self.imported_list.itemClicked.connect(self.on_imported_file_clicked)
+
+        # "New file" row support
+        self._pending_new_item = None   # blank row while the name is typed
+        self._draft_item = None         # named row, not saved to disk yet
+        self._draft_name = None
+        self._last_folder = ""          # remembered after the first save
+        self._imported_delegate = NewFileDelegate(self.imported_list)
+        self.imported_list.setItemDelegate(self._imported_delegate)
+
+        self._imported_delegate.closeEditor.connect(
+            self._on_new_file_editor_closed
+        )
+        # Delete key on the imported files list
+        self._delete_shortcut = QShortcut(
+            QKeySequence("Delete"), self.imported_list
+        )
+        self._delete_shortcut.setContext(Qt.WidgetShortcut)
+        self._delete_shortcut.activated.connect(self.on_delete_selected_file)
+        # Click on the trash icon of the selected row
+        self._press_item = None
+        self._press_was_selected = False
+        self.imported_list.viewport().installEventFilter(self)
+
+        imported_layout.addWidget(self.imported_list)
+        imported_layout.addWidget(self.imported_list)
+
+        # New / Save / Import buttons under the list
+        button_row = QHBoxLayout()
+        button_row.setSpacing(10)
+
+        self.new_button = QPushButton("+  New")
+        self.new_button.setObjectName("newButton")
+        self.new_button.clicked.connect(self.on_new)
+
+        self.save_button = QPushButton("Save")
+        self.save_button.setObjectName("saveButton")
+        self.save_button.clicked.connect(self.on_save)
+
+        # small arrow next to Save -> opens the "Save As..." dropdown
+        self.save_arrow_button = QPushButton("▾")
+        self.save_arrow_button.setObjectName("saveArrowButton")
+        self.save_arrow_button.setFixedWidth(30)
+        self.save_arrow_button.setToolTip("More save options")
+        self.save_arrow_button.clicked.connect(self._show_save_menu)
+
+        self._save_menu = QMenu(self)
+        self._save_menu.addAction(self.act_save_as)
+
+        self.import_button = QPushButton("Import")
+        self.import_button.setObjectName("importButton")
+        self.import_button.clicked.connect(self.on_import)
+
+        for button in (self.new_button, self.save_button,
+                       self.save_arrow_button, self.import_button):
+            button.setCursor(Qt.PointingHandCursor)
+            button.setMinimumHeight(40)
+
+        # Save + arrow are glued together so they look like one split button
+        save_group = QHBoxLayout()
+        save_group.setSpacing(0)
+        save_group.addWidget(self.save_button, 1)
+        save_group.addWidget(self.save_arrow_button)
+
+        button_row.addWidget(self.new_button)
+        button_row.addWidget(self.import_button)
+        button_row.addLayout(save_group)
+
+        imported_layout.addLayout(button_row)
+        sidebar_layout.addWidget(self.imported_section, 0)
+        sidebar_layout.addSpacing(12)
+
+        # ================================================================
+        # SECTION 2: Bus / Log Configuration  (own frame + own layout)
+        # ================================================================
+        self.config_section = QFrame()
+        self.config_section.setObjectName("configSection")
+        self.config_section.setAttribute(Qt.WA_StyledBackground, True)
+        config_layout = QVBoxLayout(self.config_section)
+        config_layout.setContentsMargins(10, 10, 10, 10)
+        config_layout.setSpacing(6)
+
+        self.config_label = QLabel("Configuration")
+        self.config_label.setFont(section_font)
+        config_layout.addWidget(self.config_label)
+
+        self.new_tree = QTreeWidget()
+        self.new_tree.setHeaderHidden(True)
+        self.new_tree.setVisible(True)
+        self.new_tree.setRootIsDecorated(False)
+        self.new_tree.setIndentation(16)
+        self.new_tree.setAnimated(True)
+        self.new_tree.setExpandsOnDoubleClick(False)
+        self.new_tree.setUniformRowHeights(True)
+        self.new_tree.setMouseTracking(True)
+        self.new_tree.viewport().setAttribute(Qt.WA_Hover, True)
+        self.new_tree.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.new_tree.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.tree_delegate = ModernTreeDelegate(self.new_tree)
+        self.new_tree.setItemDelegate(self.tree_delegate)
+        self.new_tree.itemClicked.connect(self.on_tree_item_clicked)
+        config_layout.addWidget(self.new_tree, 1)
+
+        # stretch 1 = grow and fill remaining space under Imported Files
+        sidebar_layout.addWidget(self.config_section, 1)
+        self.imported_files = []
+        
+      
+
+        root_layout.addWidget(
+            self.sidebar
+        )
+
+        # ---------------- Main area ----------------
+        main_area = QWidget()
+        main_area.setObjectName(
+            "mainArea"
+        )
+
+        main_area.setAttribute(
+            Qt.WA_StyledBackground,
+            True
+        )
+
+        main_layout = QVBoxLayout(
+            main_area
+        )
+
+        main_layout.setContentsMargins(
+            24,
+            12,
+            24,
+            12
+        )
+
+        main_layout.setSpacing(10)
+
+        topbar = QHBoxLayout()
+
+        # The heading and the two switches live in one group,
+        # so they always stay side by side.
+        title_group = QWidget()
+        title_row = QHBoxLayout(title_group)
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(8)          # gap between the heading and the switch
+
+        self.title_label = QLabel("Configuration Tool")
+        self.title_label.setFont(QFont(FONT_FAMILY, 21, QFont.Bold))
+        self.title_label.setSizePolicy(
+            QSizePolicy.Maximum, QSizePolicy.Preferred
+        )
+        title_row.addWidget(self.title_label, 0, Qt.AlignVCenter)
+
+        # Editing switches: shown next to the heading on Filters and Triggers
+        self.filters_switch = SlideSwitch()
+        self.triggers_switch = SlideSwitch()
+        self.filters_switch.setToolTip("Switch on to add or change filters")
+        self.triggers_switch.setToolTip("Switch on to change triggers")
+        self.filters_switch.toggled.connect(
+            lambda on: self._on_lock_toggled("filters", on)
+        )
+        self.triggers_switch.toggled.connect(
+            lambda on: self._on_lock_toggled("triggers", on)
+        )
+        title_row.addWidget(self.filters_switch, 0, Qt.AlignVCenter)
+        title_row.addWidget(self.triggers_switch, 0, Qt.AlignVCenter)
+        for widget in (self.filters_switch, self.triggers_switch):
+            widget.setVisible(False)
+
+        topbar.addWidget(title_group)
+        topbar.addStretch(1)
+
+
+        # Help, theme and logo buttons are not shown any more. They are still
+        # created (and hidden) because the theme code further down uses them.
+        self.help_button = QPushButton("?")
+        self.help_button.setObjectName("helpButton")
+        self.help_button.clicked.connect(self.on_help)
+
+        self.theme_toggle = QPushButton()
+        self.theme_toggle.setObjectName("themeToggle")
+        self.theme_toggle.setIconSize(QSize(18, 18))
+        self.theme_toggle.clicked.connect(self.toggle_theme)
+
+        self.skillicon_btn = QPushButton()
+        self.skillicon_btn.setObjectName("skilliconBrand")
+        self.skillicon_btn.setIcon(skillicon_logo_icon())
+
+        for hidden in (self.help_button, self.theme_toggle, self.skillicon_btn):
+            hidden.setParent(self)
+            hidden.hide()
+
+        # Home button: the only button at the right end of the toolbar
+        self.home_button = HomeButton()
+        self.home_button.clicked.connect(self.home_requested)
+        topbar.addWidget(self.home_button)
+
+        main_layout.addLayout(
+            topbar
+        )
+
+        self.content_panel = QFrame()
+        self.content_panel.setObjectName(
+            "contentPanel"
+        )
+
+        self.content_panel.setAttribute(
+            Qt.WA_StyledBackground,
+            True
+        )
+
+        self.content_panel.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding
+        )
+        self.content_panel.setMaximumHeight(500)
+        content_layout = QVBoxLayout(self.content_panel)
+        content_layout.setContentsMargins(12, 10, 12, 10)
+
+        self.content_stack = QStackedWidget()
+        self.content_stack.setVisible(False)
+
+        self.log_pages = LogConfigWidget(
+            get_full_config=self._collect_config,
+            show_status=lambda msg: self.statusBar().showMessage(msg, 8000),
+        )
+        self.log_pages.configuration_changed.connect(
+           self.sync_logging_to_model
+        )
+        
+
+        self.classic_can_page = ClassicCANSettingsDialog(self)
+        self.canfd_page = CANFDSettingsDialog(self)
+
+        self.content_stack.addWidget(self.log_pages)         # 0
+        self.content_stack.addWidget(self.classic_can_page)  # 1
+        self.content_stack.addWidget(self.canfd_page)        # 2
+
+        content_layout.addWidget(self.content_stack)
+        shadow = QGraphicsDropShadowEffect(
+            self
+        )
+
+        shadow.setBlurRadius(20)
+        shadow.setXOffset(0)
+        shadow.setYOffset(2)
+
+        shadow.setColor(
+            QColor(
+                16,
+                24,
+                40,
+                40
+            )
+        )
+
+        self.content_panel.setGraphicsEffect(
+            shadow
+        )
+
+        main_layout.addWidget(
+            self.content_panel,
+            1
+        )
+
+        root_layout.addWidget(
+            main_area,
+            1
+        )
+
+        self.apply_theme()
+        self._show_device_tree()      # show the device tree on startup
+        self._mark_clean()
+    # ------------------------------------------------------------------
+    # Toolbar
+    # ------------------------------------------------------------------
+    def _create_toolbar(self):
+        # No top toolbar any more: New / Save / Import are sidebar buttons.
+        # The actions stay so the keyboard shortcuts keep working.
+        self.act_new = QAction("New", self)
+        self.act_new.setShortcut("Ctrl+N")
+        self.act_new.triggered.connect(self.on_new)
+
+        self.act_open = QAction("Open", self)
+        self.act_open.setShortcut("Ctrl+O")
+        self.act_open.triggered.connect(self.on_open)
+
+        self.act_save = QAction("Save", self)
+        self.act_save.setShortcut("Ctrl+S")
+        self.act_save.triggered.connect(self.on_save)
+
+        self.act_save_as = QAction("Save As...", self)
+        self.act_save_as.setShortcut("Ctrl+Shift+S")
+        self.act_save_as.triggered.connect(self.on_save_as)
+
+        self.act_import = QAction("Import", self)
+        self.act_import.triggered.connect(self.on_import)
+
+        for action in (self.act_new, self.act_open,
+                       self.act_save, self.act_save_as):
+            self.addAction(action)
+        
+
+    def _refresh_toolbar_theme(self, c):
+        self.statusBar().setStyleSheet(
+            f"QStatusBar {{ background-color: {c['bg_panel']};"
+            f" color: {c['text_secondary']}; }}"
+        )
+        
+    # ------------------------------------------------------------------
+    # Unsaved-changes warning
+    # ------------------------------------------------------------------
+    def _snapshot(self):
+        try:
+            return json.dumps(self._collect_config(), sort_keys=True)
+        except (ValueError, TypeError):
+            return None
+
+    def _mark_clean(self):
+        """Remember the current configuration as 'saved'."""
+        self._saved_snapshot = self._snapshot()
+
+    def _has_unsaved_changes(self):
+        current = self._snapshot()
+        if current is None:          # half-typed / invalid values
+            return True
+        return current != self._saved_snapshot
+
+    def _confirm_discard_changes(self):
+        """Ask 'Save your changes?'. Returns True if it is OK to continue."""
+        if not self._confirm_leave_page():      # edits on the open page
+            return False
+        if not self._has_unsaved_changes():
+            return True
+        answer = QMessageBox.question(
+            self, "Unsaved changes", "Save your changes?",
+            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+            QMessageBox.Save
+        )
+        if answer == QMessageBox.Cancel:
+            return False
+        if answer == QMessageBox.Save:
+            self.on_save()
+            # the file dialog may have been cancelled, or saving may have failed
+            return not self._has_unsaved_changes()
+        return True                  # Discard
+
+    def _reselect_current_file(self):
+        """Put the list highlight back on the file that is really open."""
+        self.imported_list.clearSelection()
+        for i in range(self.imported_list.count()):
+            item = self.imported_list.item(i)
+            if item.data(Qt.UserRole) == self.current_file_path:
+                self.imported_list.setCurrentItem(item)
+                break
+
+    def closeEvent(self, event):
+        if self._confirm_discard_changes():
+            event.accept()
+        else:
+            event.ignore()
+
+    # ------------------------------------------------------------------
+    # Active CAN mode (single-channel logger: only one mode at a time)
+    # ------------------------------------------------------------------
+    def _turn_off_other_mode(self, other):
+        """Switch off 'other' ('classic' or 'canfd') if it is enabled."""
+        if other == "canfd":
+            settings = dict(self.controller.get_canfd())
+            page = getattr(self, "canfd_page", None)
+            update = self.controller.update_canfd
+            off_name, on_name = "CAN FD", "Classic CAN"
+        else:
+            settings = dict(self.controller.get_classic_can())
+            page = getattr(self, "classic_can_page", None)
+            update = self.controller.update_classic_can
+            off_name, on_name = "Classic CAN", "CAN FD"
+
+        if not settings.get("enabled"):
+            return
+
+        settings["enabled"] = False
+        update(settings)
+        if other == "classic":
+            self.classic_can_enabled = False
+        if page is not None:
+            page.disable_radio.setChecked(True)
+
+        self.statusBar().showMessage(
+            f"{off_name} turned off - {on_name} is now the active mode", 5000
+        )
+
+    def _active_mode_name(self):
+        classic = bool(self.controller.get_classic_can().get("enabled"))
+        fd = bool(self.controller.get_canfd().get("enabled"))
+        if classic and fd:
+            return "Conflict"
+        if classic:
+            return "Classic CAN"
+        if fd:
+            return "CAN FD"
+        return "None"
+
+    def _refresh_mode_display(self):
+        """Show '(enabled)' next to each CAN mode that is switched on."""
+        classic_on = bool(self.controller.get_classic_can().get("enabled"))
+        fd_on = bool(self.controller.get_canfd().get("enabled"))
+
+        items = getattr(self, "_bus_mode_items", None)
+        if items:
+            try:
+                items[0].setText(
+                    0, "Classic CAN  (enabled)" if classic_on
+                    else "Classic CAN")
+                items[1].setText(
+                    0, "CAN FD  (enabled)" if fd_on
+                    else "CAN FD")
+            except RuntimeError:          # tree items were just rebuilt
+                pass
+    # ------------------------------------------------------------------
+    # Window title
+    # ------------------------------------------------------------------
+    def _update_title(self):
+        name = (
+            f" - {os.path.basename(self.current_file_path)}"
+            if self.current_file_path else ""
+        )
+        self.setWindowTitle(f"Configuration Tool{name}")
+
+    def sync_logging_to_model(self):
+        try:
+            settings = self.log_pages.collect()
+
+            self.controller.update_logging_config(
+                settings
+            )
+
+        except ValueError:
+            # Allow users to edit temporarily incomplete values.
+            # Validation will run again when saving.
+            pass
+    # ------------------------------------------------------------------
+    # Configuration data (used by Save / Open / Import / Export)
+    # ------------------------------------------------------------------
+    
+    def _collect_config(self) -> dict:
+
+        # Collect the current logging settings
+        log_data = self.log_pages.collect()
+
+        # Update the central logging model
+        self.controller.update_logging_config(
+            log_data
+        )
+
+        # Preserve the existing configuration file format
+        data = {
+            "app": "CAN Configuration Tool",
+            "version": CURRENT_CONFIG_VERSION,
+            "classic_can": dict(self.classic_can_settings),
+            "canfd": dict(self.canfd_settings),
+        }
+
+        data.update(log_data)
+
+        return data
+
+    
+    def _apply_config(self, data):
+        if not isinstance(data, dict) or not isinstance(
+            data.get("classic_can"), dict
+        ):
+            raise ValueError(
+                "This is not a valid configuration file."
+            )
+
+        log_data = default_log_config()
+
+        for key in ("filters", "triggers", "logging"):
+            if key in data:
+                log_data[key] = data[key]
+
+        validate_log_config(log_data)
+
+        classic = dict(DEFAULT_CLASSIC_CAN)
+        classic.update(data["classic_can"])
+
+        canfd = dict(DEFAULT_CANFD)
+
+        if isinstance(data.get("canfd"), dict):
+            canfd.update(data["canfd"])
+
+        self.controller.update_bus_settings(classic, canfd)
+
+        self.classic_can_enabled = bool(
+            classic.get("enabled", False)
+        )
+
+        self.log_pages.apply(log_data)
+        self.controller.update_logging_config(log_data)
+    
+    
+    def _write_json(self, path: str, mark_clean: bool = True) -> bool:
+
+      try:
+        # Step 1: Collect configuration from the UI
+        data = self._collect_config()
+
+        # Step 2: Ask the controller to save
+        self.controller.save_configuration(
+            path,
+            data
+        )
+
+        if mark_clean:
+            self._saved_snapshot = json.dumps(data, sort_keys=True)
+
+        return True
+
+      except ValueError as error:
+        QMessageBox.warning(
+            self,
+            "Invalid configuration",
+            str(error)
+        )
+        return False
+
+      except (OSError, TypeError, KeyError) as error:
+        QMessageBox.critical(
+            self,
+            "Save error",
+            f"Could not save file:\n{error}"
+        )
+        return False
+    
+    def _read_json(self, path: str) -> bool:
+        try:
+            data = self.controller.load_configuration(path)
+
+            self._apply_config(data)
+            self._mark_clean()
+
+            return True
+
+        except FileNotFoundError:
+            QMessageBox.warning(
+                self,
+                "File not found",
+                "The selected configuration file could not be found."
+            )
+
+        except PermissionError:
+            QMessageBox.warning(
+                self,
+                "Access denied",
+                "You do not have permission to read this file."
+            )
+
+        except json.JSONDecodeError:
+            QMessageBox.warning(
+                self,
+                "Invalid JSON",
+                "The configuration file contains invalid JSON data."
+            )
+
+        except (ValueError, KeyError, TypeError) as error:
+            QMessageBox.warning(
+                self,
+                "Invalid configuration",
+                str(error)
+            )
+
+        except OSError as error:
+            QMessageBox.critical(
+                self,
+                "File error",
+                f"Could not read the configuration file:\n{error}"
+            )
+
+        return False
+
+
+    # ------------------------------------------------------------------
+    # Imported files list
+    # ------------------------------------------------------------------
+    def _add_imported_file(self, path: str):
+        """Add a JSON file to the sidebar list if not already present."""
+        path = os.path.normpath(os.path.abspath(path))
+        if path in self.imported_files:
+            for i in range(self.imported_list.count()):
+                item = self.imported_list.item(i)
+                if item.data(Qt.UserRole) == path:
+                    self.imported_list.setCurrentItem(item)
+                    break
+            return
+
+        self.imported_files.append(path)
+        item = QListWidgetItem("•  " + os.path.basename(path))
+        item.setData(Qt.UserRole, path)
+        item.setToolTip(path)
+        self.imported_list.addItem(item)
+        self.imported_list.setCurrentItem(item)
+
+    def on_imported_file_clicked(self, item: QListWidgetItem):
+        path = item.data(Qt.UserRole)
+        if not path:
+            return
+
+        if not self._confirm_discard_changes():
+            self._reselect_current_file()
+            return
+
+        if self._read_json(path):
+            self.current_file_path = path
+            self._update_title()
+            self.statusBar().showMessage(f"Loaded: {path}", 3000)
+            self._show_device_tree()
+    # ------------------------------------------------------------------
+    # New file row (like "New File" in VS Code)
+    # ------------------------------------------------------------------
+    def _start_new_file_row(self):
+        # Already typing a name? Just put the cursor back there.
+        if self._pending_new_item is not None:
+            self.imported_list.editItem(self._pending_new_item)
+            return
+
+        item = QListWidgetItem("")
+        item.setFlags(item.flags() | Qt.ItemIsEditable)
+        self.imported_list.addItem(item)
+        self.imported_list.setCurrentItem(item)
+        self.imported_list.clearSelection()
+        self.imported_list.scrollToItem(item)
+        self._pending_new_item = item
+        self.imported_list.setFocus()
+        self.imported_list.editItem(item)
+
+    def _on_new_file_editor_closed(self, editor, hint):
+        item = self._pending_new_item
+        if item is None:
+            return
+        name = item.text().strip()
+        self._pending_new_item = None
+        # Deferred: the editor is still closing at this moment
+        QTimer.singleShot(0, lambda: self._finish_new_file(item, name))
+
+    def _finish_new_file(self, item, name):
+        def discard():
+            row = self.imported_list.row(item)
+            if row >= 0:
+                self.imported_list.takeItem(row)
+
+        if not name:                      # Esc or empty name
+            discard()
+            return
+
+        if any(ch in name for ch in '<>:"/\\|?*'):
+            QMessageBox.warning(
+                self, "Invalid name",
+                'A file name cannot contain any of these characters:\n'
+                '< > : " / \\ | ? *'
+            )
+            discard()
+            return
+
+        if not name.lower().endswith(".json"):
+            name += ".json"
+
+        # name already used by another row in the list?
+        for i in range(self.imported_list.count()):
+            other = self.imported_list.item(i)
+            if other is not item and \
+               other.text().lstrip("• ").strip().lower() == name.lower():
+                QMessageBox.warning(
+                    self, "Name already used",
+                    f"{name} is already in the list."
+                )
+                discard()
+                return
+
+        # Keep it as a draft: nothing is written to disk until Save
+        item.setText("•  " + name)
+        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+        item.setToolTip("Not saved yet - click Save to choose a folder")
+        self._draft_item = item
+        self._draft_name = name
+        self.imported_list.setCurrentItem(item)
+        self.statusBar().showMessage(
+            f"{name} created - click Save to choose where to store it", 6000
+        )
+
+    def _discard_draft(self):
+        item = self._draft_item
+        self._draft_item = None
+        self._draft_name = None
+        if item is not None:
+            row = self.imported_list.row(item)
+            if row >= 0:
+                self.imported_list.takeItem(row)
+
+    def _save_draft(self):
+        """First Save of a file created with New: ask for the folder."""
+        start = (
+            os.path.join(self._last_folder, self._draft_name)
+            if self._last_folder else self._draft_name
+        )
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save new file", start, JSON_FILTER
+        )
+        if not path:
+            return
+
+        if not os.path.splitext(path)[1]:
+            path += ".json"
+        path = os.path.normpath(os.path.abspath(path))
+
+        if path in self.imported_files:
+            QMessageBox.warning(
+                self, "Already in list",
+                "That file is already in the imported files list.\n"
+                "Please choose a different name."
+            )
+            return
+
+        if not self._write_json(path):    # shows its own error message
+            return
+
+        item = self._draft_item
+        self.imported_files.append(path)
+        item.setText("•  " + os.path.basename(path))
+        item.setData(Qt.UserRole, path)
+        item.setToolTip(path)
+        self._draft_item = None
+        self._draft_name = None
+        self._last_folder = os.path.dirname(path)
+
+        self.current_file_path = path     # later saves go to this file
+        self._update_title()
+        self.imported_list.setCurrentItem(item)
+        self.statusBar().showMessage(f"Saved: {path}", 3000)
+
+    # ------------------------------------------------------------------
+    # Toolbar actions
+    # ------------------------------------------------------------------
+     
+    def _clear_page_area(self):
+        """Empty the right-hand side (no page open)."""
+        self._current_page = None
+        self.title_label.setText("Configuration Tool")
+        self._show_lock_switch(None)          # hide Filters/Triggers switches
+        self.content_stack.setVisible(False)  # hide all pages
+
+    def _reset_to_defaults(self):
+        """Defaults in every window, and an empty page area."""
+        self.classic_can_settings = dict(DEFAULT_CLASSIC_CAN)
+        self.classic_can_enabled = False
+        self.classic_can_default_settings = dict(DEFAULT_CLASSIC_CAN)
+        self.classic_can_default_all_settings = dict(DEFAULT_CLASSIC_CAN)
+        self.classic_can_all_settings = dict(DEFAULT_CLASSIC_CAN)
+        self.canfd_settings = dict(DEFAULT_CANFD)
+        self.controller.update_logging_config(default_log_config())
+        self.log_pages.apply(default_log_config())
+
+        self.classic_can_page.load_from_parent()
+        self.canfd_page.load_from_parent()
+
+        self.current_file_path = None
+        self._update_title()
+        self._show_device_tree()
+        self.imported_list.clearSelection()
+        self._mark_clean()
+        self._clear_page_area()
+
+    def on_new(self):
+        if not self._confirm_discard_changes():
+            return
+
+        self._discard_draft()
+
+        self.classic_can_settings = dict(DEFAULT_CLASSIC_CAN)
+        self.classic_can_enabled = False
+        self.classic_can_default_settings = dict(DEFAULT_CLASSIC_CAN)
+        self.classic_can_default_all_settings = dict(DEFAULT_CLASSIC_CAN)
+        self.classic_can_all_settings = dict(DEFAULT_CLASSIC_CAN)
+        self.canfd_settings = dict(DEFAULT_CANFD)
+        self.controller.update_logging_config(default_log_config())
+        self.log_pages.apply(default_log_config())
+
+        self.classic_can_page.load_from_parent()
+        self.canfd_page.load_from_parent()
+
+        self.current_file_path = None
+        self._update_title()
+        self._show_device_tree()
+        self.statusBar().showMessage("New configuration", 3000)
+        self.imported_list.clearSelection()
+        self._mark_clean()
+
+        self._start_new_file_row()
+
+    def on_open(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open configuration", "", PROJECT_FILTER
+        )
+        if not path:
+            return
+        
+        if not path:
+            return
+
+        if not self._confirm_discard_changes():
+            return
+
+        if self._read_json(path):
+            self.current_file_path = path
+            self._update_title()
+            self._show_device_tree()
+            self.statusBar().showMessage(f"Opened: {path}", 3000)
+
+    def save_section(self, key, title):
+        """Save only one section (Classic CAN or CAN FD) into the current file.
+        The rest of the file stays exactly as it is on disk."""
+        path = self.current_file_path
+        if path is None:
+            # no file yet: do a normal full save (it asks for the path)
+            self.on_save()
+            return
+
+        try:
+            data = self.controller.load_configuration(path)
+        except (OSError, ValueError) as error:
+            QMessageBox.warning(
+                self, "Cannot update file",
+                f"The file could not be read:\n{error}\n\n"
+                "Use Save in the sidebar to write the whole configuration."
+            )
+            return
+
+        other = "canfd" if key == "classic_can" else "classic_can"
+        section = dict(
+            self.classic_can_settings if key == "classic_can"
+            else self.canfd_settings
+        )
+        data[key] = section
+        if section.get("enabled") and isinstance(data.get(other), dict):
+            data[other]["enabled"] = False      # one CAN mode at a time
+
+        try:
+            self.controller.save_configuration(path, data)
+        except (ValueError, OSError, TypeError, KeyError) as error:
+            QMessageBox.warning(self, "Save error", str(error))
+            return
+
+        # tell the unsaved-changes check that this section is now on disk
+        try:
+            snap = json.loads(self._saved_snapshot)
+            snap[key] = dict(section)
+            if section.get("enabled") and isinstance(snap.get(other), dict):
+                snap[other]["enabled"] = False
+            self._saved_snapshot = json.dumps(snap, sort_keys=True)
+        except (TypeError, ValueError):
+            pass
+
+        self.statusBar().showMessage(
+            f"{title} settings saved to {os.path.basename(path)}", 4000
+        )
+
+    def on_save(self):
+        # file created with New but not saved yet -> ask for the folder
+        if self.current_file_path is None and self._draft_item is not None:
+            self._save_draft()
+            return
+        
+        # First time: no path yet, so ask for it. After that: save silently.
+        if self.current_file_path is None:
+            self.on_save_as()
+            return
+
+        if self._write_json(self.current_file_path):
+            self.statusBar().showMessage(
+                f"Saved: {self.current_file_path}", 3000
+            )
+
+    def on_save_as(self):
+        # New file that was never saved: same "choose folder" dialog
+        if self.current_file_path is None and self._draft_item is not None:
+            self._save_draft()
+            return
+
+        # Always ask for the path
+        if self.current_file_path:
+            start = self.current_file_path
+        elif self._last_folder:
+            start = os.path.join(self._last_folder, "config.json")
+        else:
+            start = "config.json"
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save As", start, JSON_FILTER
+        )
+        if not path:
+            return
+
+        if not os.path.splitext(path)[1]:
+            path += ".json"
+        path = os.path.normpath(os.path.abspath(path))
+
+        if self._write_json(path):
+            self.current_file_path = path
+            self._last_folder = os.path.dirname(path)
+            self._update_title()
+            self._add_imported_file(path)   # shows it in the list
+            self.statusBar().showMessage(f"Saved: {path}", 3000)
+
+    def eventFilter(self, obj, event):
+        if obj is self.imported_list.viewport():
+            kind = event.type()
+
+            if kind == QEvent.MouseButtonPress and \
+               event.button() == Qt.LeftButton:
+                item = self.imported_list.itemAt(event.position().toPoint())
+                self._press_item = item
+                self._press_was_selected = (
+                    item is not None and item.isSelected()
+                )
+
+            elif kind == QEvent.MouseButtonRelease and \
+                 event.button() == Qt.LeftButton:
+                pos = event.position().toPoint()
+                item = self.imported_list.itemAt(pos)
+                if (item is not None
+                        and item is self._press_item
+                        and self._press_was_selected
+                        and item.data(Qt.UserRole)):
+                    hit = NewFileDelegate.trash_rect(
+                        self.imported_list.visualItemRect(item)
+                    ).adjusted(-6, -6, 6, 6)
+                    if hit.contains(pos):
+                        self.imported_list.setCurrentItem(item)
+                        QTimer.singleShot(0, self.on_delete_selected_file)
+                        return True
+        return super().eventFilter(obj, event)
+    
+    def on_delete_selected_file(self):
+        item = self.imported_list.currentItem()
+        if item is None or item is self._pending_new_item:
+            return
+
+        # Draft created with New but never saved: remove the row
+        if item is self._draft_item:
+            self._discard_draft()
+            if self.current_file_path is None:
+                self._reset_to_defaults()
+                self.statusBar().showMessage(
+                    "Draft removed. Settings reset to defaults", 3000
+                )
+            return
+
+        path = item.data(Qt.UserRole)
+        name = os.path.basename(path) if path else item.text()
+
+        # Is this the file whose settings are on screen right now?
+        def _same(a, b):
+            return bool(a) and bool(b) and (
+                os.path.normcase(os.path.normpath(a))
+                == os.path.normcase(os.path.normpath(b))
+            )
+        was_open = _same(path, self.current_file_path)
+
+        # Ask first
+        text = f"Remove '{name}' from the list?\n\n"
+        if was_open:
+            text += ("The settings on screen will be reset to their "
+                     "default values.\n\n")
+        answer = QMessageBox.question(
+            self, "Remove file", text,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        # Remove from the list only. The file on disk is NOT touched.
+        row = self.imported_list.row(item)
+        if row >= 0:
+            self.imported_list.takeItem(row)
+        if path in self.imported_files:
+            self.imported_files.remove(path)
+
+        if was_open:
+            self._reset_to_defaults()
+            self.statusBar().showMessage(
+                f"Removed '{name}'. Settings reset to defaults", 3000
+            )
+        else:
+            self.statusBar().showMessage(
+                f"Removed from list: {name}", 3000
+            )
+
+    def _show_save_menu(self):
+        # open the dropdown just below the Save button
+        pos = self.save_button.mapToGlobal(
+            self.save_button.rect().bottomLeft()
+        )
+        self._save_menu.exec(pos)
+
+    def on_import(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import JSON", "", JSON_FILTER
+        )
+        if not path:
+            return
+
+        if not path:
+            return
+
+        if not self._confirm_discard_changes():
+            return
+
+        if self._read_json(path):
+            self.current_file_path = path
+            self._update_title()
+            self._add_imported_file(path)
+            self._show_device_tree()
+            self.statusBar().showMessage(f"Imported: {path}", 3000)
+
+    def on_help(self):
+        QMessageBox.information(
+            self,
+            "Help",
+            "Configuration Tool\n\n"
+            "Toolbar\n"
+            "  New (Ctrl+N)  start a new configuration\n"
+            "  Open (Ctrl+O)  open a saved configuration\n"
+            "  Save (Ctrl+S)  save; the arrow next to it gives Save As\n"
+            "  Import  load settings from a JSON file\n\n"
+            "Tree on the left\n"
+            "  Bus Configuration  Classic CAN and CAN FD settings\n"
+            "  Log Configuration  Filters, Triggers and Log Files\n"
+            "  Generate Config  checks the settings and creates "
+            "the configuration file"
+        )
+        
+    def on_export(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Generate Config", "config_export.json", JSON_FILTER
+        )
+        if not path:
+            return
+
+        if not os.path.splitext(path)[1]:
+            path += ".json"
+
+        if self._write_json(path, mark_clean=False):
+            self.statusBar().showMessage(f"Exported: {path}", 3000)
+
+    # ------------------------------------------------------------------
+    # Device tree
+    # ------------------------------------------------------------------
+    def _show_device_tree(self):
+        self.new_tree.clear()
+
+        bus_item = QTreeWidgetItem(["Bus Configuration"])
+        classic_item = QTreeWidgetItem(["Classic CAN"])
+        classic_item.setData(0, Qt.UserRole, "Classic CAN")
+        fd_item = QTreeWidgetItem(["CAN FD"])
+        fd_item.setData(0, Qt.UserRole, "CAN FD")
+        bus_item.addChild(classic_item)
+        bus_item.addChild(fd_item)
+        self._bus_mode_items = (classic_item, fd_item)
+
+        self.new_tree.addTopLevelItem(bus_item)
+        log_item = QTreeWidgetItem(["Log Configuration"])
+        log_item.addChild(QTreeWidgetItem(["Filters"]))
+        log_item.addChild(QTreeWidgetItem(["Triggers"]))
+        log_item.addChild(QTreeWidgetItem(["Log Files"]))
+        self.new_tree.addTopLevelItem(log_item)
+
+        # Generate Config: a button-like item, it opens no page
+        preview_item = QTreeWidgetItem(["Generate Config"])
+        self.new_tree.addTopLevelItem(preview_item)
+
+        bus_item.setExpanded(False)
+        self._refresh_mode_display()
+        self.new_tree.setVisible(True)
+
+    # ------------------------------------------------------------------
+    # Block leaving a page that has edits not applied/saved yet
+    # ------------------------------------------------------------------
+    def _page_has_pending_changes(self):
+        current = getattr(self, "_current_page", None)
+        if current == "Classic CAN":
+            return self.classic_can_page.has_pending_changes()
+        if current == "CAN FD":
+            return self.canfd_page.has_pending_changes()
+        if current == "Triggers":
+            return self.log_pages.has_pending_triggers()
+        if current == "Log Files":
+            return self.log_pages.has_pending_logfiles()
+        return False
+        
+
+    def _confirm_leave_page(self):
+        """True if it is OK to leave the open page."""
+        if not self._page_has_pending_changes():
+            return True
+
+        QMessageBox.information(
+            self, "Apply or save your changes",
+            f"You changed settings in {self._current_page} but did not "
+            "apply or save them.\n\n"
+            "Please click Apply or Save on this page first.\n"
+            "(Click Cancel on the page if you do not want the changes.)"
+        )
+        return False
+
+    def _reselect_current_page(self):
+        """Put the tree highlight back on the page that stays open."""
+        current = getattr(self, "_current_page", None)
+        if current is None:
+            return
+        stack = [self.new_tree.topLevelItem(i)
+                 for i in range(self.new_tree.topLevelItemCount())]
+        while stack:
+            node = stack.pop()
+            if (node.data(0, Qt.UserRole) or node.text(0)) == current:
+                self.new_tree.setCurrentItem(node)
+                return
+            stack.extend(node.child(i) for i in range(node.childCount()))
+    
+
+    # ------------------------------------------------------------------
+    # Editing switches (Filters / Triggers)
+    # ------------------------------------------------------------------
+    def _on_lock_toggled(self, page, on):
+        self.log_pages.set_unlocked(page, on)
+
+    def _show_lock_switch(self, page):
+        """page is 'filters' or 'triggers'. Anything else hides both."""
+        self.filters_switch.setVisible(page == "filters")
+        self.triggers_switch.setVisible(page == "triggers")
+
+
+    def on_tree_item_clicked(self, item, column):
+        if item.childCount() > 0:
+            item.setExpanded(not item.isExpanded())
+            return
+
+        name = item.data(0, Qt.UserRole) or item.text(0)
+
+        if name == "Generate Config":
+            if not self._confirm_leave_page():
+                self._reselect_current_page()
+                return
+            self.on_export()
+            # keep the highlight on the page that is still open
+            self._reselect_current_page()
+            if getattr(self, "_current_page", None) is None:
+                self.new_tree.clearSelection()
+            return
+
+        # edits on the open page not applied/saved yet?
+        if not self._confirm_leave_page():
+            self._reselect_current_page()
+            return
+
+        page = LOG_PAGES.get(name)
+        if page:
+            self._current_page = name
+            self.title_label.setText(name)
+            self._show_lock_switch(page) 
+            self.content_stack.setVisible(True)
+            self.content_stack.setCurrentWidget(self.log_pages)
+            self.log_pages.show_page(page)
+            return
+
+        if name == "Classic CAN":
+            self._current_page = name
+            self.title_label.setText("Classic CAN")
+            self._show_lock_switch(None)  
+            self.classic_can_page.load_from_parent()
+            self.content_stack.setVisible(True)
+            self.content_stack.setCurrentWidget(self.classic_can_page)
+            return
+
+        if name == "CAN FD":
+            self._current_page = name
+            self.title_label.setText("CAN FD")
+            self._show_lock_switch(None)    
+            self.canfd_page.load_from_parent()
+            self.content_stack.setVisible(True)
+            self.content_stack.setCurrentWidget(self.canfd_page)
+            return
+
+  
+    # ------------------------------------------------------------------
+    # Theme
+    # ------------------------------------------------------------------
+    def toggle_theme(self):
+
+        self.dark_mode = not self.dark_mode
+
+        self.apply_theme()
+
+    def apply_theme(self):
+
+        c = (
+            DARK
+            if self.dark_mode
+            else LIGHT
+        )
+
+        self.sidebar.setStyleSheet(
+            f"""
+            #sidebar {{
+                background-color: {c['bg_panel']};
+                border-right: 1px solid {c['border']};
+            }}
+            """
+        )
+
+        self.brand_label.setStyleSheet(
+            f"color: {c['text_primary']};"
+        )
+
+        # Section titles — primary + bold (only once)
+        self.imported_label.setStyleSheet(
+            f"color: {c['text_secondary']}; font-size: 9pt; font-weight: 700;"
+        )
+        self.config_label.setStyleSheet(
+            f"color: {c['text_primary']}; font-weight: 600;"
+        )
+
+        # Visible section boxes (only once)
+        section_style = f"""
+            background-color: {c['bg_main']};
+            border: 2px solid {c['border']};
+            border-radius: {RADIUS_LG}px;
+        """
+        self.imported_section.setStyleSheet(
+            f"""
+            #importedSection {{
+                background: transparent;
+                border: none;
+            }}
+            QPushButton {{
+                color: {c['text_primary']};
+                background-color: {c['btn_bg']};
+                border: 1px solid {c['btn_border']};
+                border-radius: 12px;
+                padding: 0 14px;
+            }}
+            QPushButton:hover {{
+                border: 1px solid {c['accent_blue']};
+            }}
+            QPushButton:pressed {{
+                background-color: {c['border']};
+            }}
+
+            QPushButton#newButton {{
+                background-color: {c['bg_main']};
+                border: 1px solid {c['border']};
+                font-family: "Segoe UI";     /* NEW font   */
+                font-size: 10pt;             /* NEW size   */
+                font-weight: 400;            /* NEW weight */
+            }}
+            QPushButton#newButton:hover {{
+                border: 1px solid {c['accent_blue']};
+            }}
+
+            QPushButton#saveButton {{
+                font-family: "Segoe UI";     /* SAVE font   */
+                font-size: 9pt;             /* SAVE size   */
+                font-weight: 700;            /* SAVE weight */
+            }}
+
+            QPushButton#importButton {{
+                font-family: "Segoe UI";     /* IMPORT font   */
+                font-size: 9pt;             /* IMPORT size   */
+                font-weight: 700;            /* IMPORT weight */
+            }}
+            QPushButton#saveButton {{
+                padding: 0 8px;
+                border-top-right-radius: 0px;
+                border-bottom-right-radius: 0px;
+            }}
+            QPushButton#saveArrowButton {{
+                padding: 0px;
+                font-size: 11pt;
+                font-weight: 700;
+                border-left: none;
+                border-top-left-radius: 0px;
+                border-bottom-left-radius: 0px;
+            }}
+            QPushButton#saveArrowButton:hover {{
+                border: 1px solid {c['accent_blue']};
+                border-left: none;
+            }}
+            """
+        )
+        self._save_menu.setStyleSheet(
+            f"""
+            QMenu {{
+                background-color: {c['bg_panel']};
+                color: {c['text_primary']};
+                border: 1px solid {c['btn_border']};
+                padding: 6px;
+            }}
+            QMenu::item {{
+                padding: 8px 28px 8px 14px;
+                border-radius: 6px;
+                font-size: 11pt;
+            }}
+            QMenu::item:selected {{
+                background-color: {c['accent_blue']};
+                color: #FFFFFF;
+            }}
+            """
+        )
+        self.config_section.setStyleSheet(
+            f"#configSection {{ {section_style} }}"
+        )
+
+        self.centralWidget().layout().itemAt(
+            1
+        ).widget().setStyleSheet(
+            f"""
+            #mainArea {{
+                background-color: {c['bg_main']};
+            }}
+            """
+        )
+
+        self.title_label.setStyleSheet(
+            f"color: {c['text_primary']};"
+        )
+        for switch in (self.filters_switch, self.triggers_switch):
+            switch.set_colors(c['accent_blue'], c['btn_border'], "#FFFFFF")
+        
+
+        
+        self.theme_toggle.setStyleSheet(
+            f"""
+            #themeToggle {{
+                background-color: {c['bg_panel']};
+                border: 1px solid {c['border']};
+                border-radius: {RADIUS_SM}px;
+            }}
+
+            #themeToggle:hover {{
+                border: 1px solid {c['accent_blue']};
+            }}
+            """
+        )
+        self.help_button.setStyleSheet(
+            f"""
+            #helpButton {{
+                background-color: {c['bg_panel']};
+                color: {c['text_primary']};
+                border: 1px solid {c['border']};
+                border-radius: {RADIUS_SM}px;
+            }}
+
+            #helpButton:hover {{
+                border: 1px solid {c['accent_blue']};
+            }}
+            """
+        )
+        # Skillicon brand – deep yellow
+        self.skillicon_btn.setStyleSheet(f"""
+        #skilliconBrand {{
+            background-color: transparent;
+            border: none;
+            padding: 6px 12px;
+        }}
+        #skilliconBrand:hover {{
+            background-color: transparent;
+            border: none;
+        }}
+        #skilliconBrand:pressed {{
+            background-color: transparent;
+            border: none;
+        }}
+        """)
+
+        self.theme_toggle.setIcon(
+            make_theme_icon(
+                self.dark_mode,
+                c["toggle_icon"]
+            )
+        )
+
+        self.content_panel.setStyleSheet(
+            f"""
+            #contentPanel {{
+                background-color: {c['bg_panel']};
+                border: 1px solid {c['border']};
+                border-radius: {RADIUS_LG}px;
+            }}
+            """
+        )
+
+        self.imported_list.setStyleSheet(
+            f"""
+            QListWidget {{
+                background-color: {c['list_bg']};
+                border: 1px solid {c['btn_border']};
+                border-radius: {RADIUS_LG}px;
+                outline: 0;
+                padding: 3px;
+                font-size: 11pt;
+            }}
+            QListWidget::item {{
+                color: {c['text_primary']};
+                border-radius: 5px;
+                padding: 0px 40px 0px 12px;
+            }}
+            QListWidget::item:hover {{
+                background-color: {c['border']};
+            }}
+            QListWidget::item:selected {{
+                background-color: {c['accent_blue']};
+                color: #FFFFFF;
+            }}
+            QListWidget QLineEdit {{
+                background-color: {c['bg_main']};
+                color: {c['text_primary']};
+                border: 1px solid {c['btn_border']};
+                border-radius: 5px;
+                padding: 0px 10px;
+                font-size: 10.5pt;
+                selection-background-color: {c['accent_blue']};
+                selection-color: #FFFFFF;
+            }}
+            """
+        )
+        self.new_tree.setStyleSheet(
+            f"""
+            QTreeWidget {{
+                background-color: transparent;
+                border: none;
+                outline: 0;
+            }}
+            """
+        )
+        self.tree_delegate.set_colors(c)
+        self.new_tree.viewport().update()
+
+        self._refresh_toolbar_theme(c)
+        self.log_pages.set_theme(c)
+        self.classic_can_page.set_theme(c)
+        self.canfd_page.set_theme(c)

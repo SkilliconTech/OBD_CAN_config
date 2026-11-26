@@ -1,0 +1,965 @@
+import copy
+import os
+from dataclasses import replace
+from unittest import result
+from obd_tool.services.config_file import import_config, save_config_file, InvalidConfigError
+from obd_tool.services.config_importer import selection_from_config
+from obd_tool.services.config_serializer import ConfigFormatError, to_json_text
+from obd_tool.services.config_validator import validate
+from obd_tool.services.file_names import clean_file_name, DEFAULT_NAME, EXTENSION
+from obd_tool.resources.theme import LIGHT, DARK, RADIUS_SM, RADIUS_LG, FONT_FAMILY, ERROR_RED
+
+from PySide6.QtCore import Qt, QSize, QRect, QRectF, QEvent, QTimer, QUrl, QThreadPool, Signal
+from home_button import HomeButton
+from PySide6.QtGui import (
+    QFont, QColor, QAction, QShortcut, QKeySequence, QPainter, QDesktopServices, QPen
+)
+from PySide6.QtWidgets import (
+    QMainWindow, QWidget, QLabel, QPushButton, QFrame, QListWidget,
+    QListWidgetItem, QHBoxLayout, QVBoxLayout, QTreeWidget, QTreeWidgetItem,
+    QFileDialog, QMessageBox, QMenu, QGraphicsDropShadowEffect,
+    QStackedWidget, QSizePolicy, QStyledItemDelegate, QStyle
+)
+
+from obd_tool.resources.theme import LIGHT, DARK, RADIUS_SM, RADIUS_LG, FONT_FAMILY
+from obd_tool.resources.icons import make_theme_icon, trash_pixmap, logo_icon
+from obd_tool.views.tree_delegate import ModernTreeDelegate
+from obd_tool.views.slide_switch import SlideSwitch
+from obd_tool.models.modes import MODES
+from obd_tool.models.pid_directory import get_mode_info
+from obd_tool.views.mode_info_page import ModeInfoPage
+from obd_tool.views.pid_page import PidPage
+from obd_tool.views.mode_tree import ModeTree
+from obd_tool.models.logger_config import LoggerConfig
+from obd_tool.views.settings_page import SettingsPage
+from obd_tool.views.settings_tree import SettingsTree
+from obd_tool.services.config_builder import build_config, DEFAULT_INTERVAL_MS
+from obd_tool.services.config_sync import ConfigSync, describe_result
+from obd_tool.views.target_selector import TargetSelector
+from obd_tool.views.mtp_tasks import MtpSendTask
+from obd_tool.services.mtp_device import MTP_PREFIX
+from obd_tool.views.problems_bar import ProblemsBar
+
+APP_TITLE = "OBD Configuration"
+COMPANY_URL = "https://skillicon.in/"
+
+ROW_ID = Qt.UserRole + 1      # a number that identifies each row of the files list
+ROW_NAME = Qt.UserRole + 2    # the last accepted name of a row (to spot a new edit)
+# What makes up one configuration on the screen. Each row of the files list remembers these.
+SCREEN_STATE = ("selected_modes", "selected_pids", "pid_intervals", "frame_02", "save_path")
+
+
+class NewFileDelegate(QStyledItemDelegate):
+    """Row height + trash icon on the selected row of the files list."""
+    ROW_HEIGHT = 34
+    ICON_SIZE = 15
+    ICON_RIGHT_GAP = 14
+
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        size.setHeight(self.ROW_HEIGHT)
+        return size
+
+    def updateEditorGeometry(self, editor, option, index):
+        editor.setGeometry(option.rect.adjusted(2, 3, -60, -3))
+
+    @classmethod
+    def trash_rect(cls, row_rect):
+        s = cls.ICON_SIZE
+        return QRect(row_rect.right() - cls.ICON_RIGHT_GAP - s,
+                     row_rect.center().y() - s // 2 + 1, s, s)
+
+    def paint(self, painter, option, index):
+        unsaved = not index.data(Qt.UserRole)                  # never saved
+        selected = bool(option.state & QStyle.State_Selected)
+
+        if unsaved:                                            # red, selected or not
+            painter.save()
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            bg = QColor(ERROR_RED)
+            bg.setAlpha(70 if selected else 40)                # a bit stronger when selected
+            painter.setPen(QPen(QColor(ERROR_RED), 1.2) if selected else Qt.NoPen)
+            painter.setBrush(bg)
+            painter.drawRoundedRect(QRectF(option.rect).adjusted(0.6, 0.6, -0.6, -0.6), 5, 5)
+            painter.setPen(QColor(ERROR_RED))                  # red text
+            painter.setFont(option.font)
+            text_rect = option.rect.adjusted(12, 0, -40, 0)    # same padding as the stylesheet
+            text = painter.fontMetrics().elidedText(
+                str(index.data(Qt.DisplayRole) or ""), Qt.ElideRight, text_rect.width())
+            painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, text)
+            painter.restore()
+            return
+
+        super().paint(painter, option, index)
+        if selected:                                           # trash icon (unchanged)
+            painter.save()
+            painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+            painter.drawPixmap(self.trash_rect(option.rect), trash_pixmap())
+            painter.restore()
+
+class ObdMainWindow(QMainWindow):
+    """UI shell only: sidebar (files + tree), top bar, page area, theme.
+    No business logic. Hook your own code into the on_* methods."""
+
+    home_requested = Signal()
+    def __init__(self):
+        super().__init__()
+        self.dark_mode = False
+        self.pages = {}              # tree-item name -> page widget
+        self._current_page = None
+        self.imported_files = []
+        self.selected_modes = []
+        self.selected_pids = {}
+        self.pid_intervals = {}                # remembered interval per request: {"01": {"0C": 250}}
+        self.config_sync = ConfigSync()
+        self.save_path = ""                     # file chosen with Save / Save As
+        self.base_config = LoggerConfig()      # the settings (bitrate, IDs, timings)
+        self.frame_02 = "00"                   # freeze frame number for Mode 02
+        self._row_states = {}                  # row id -> the configuration it had when you left it
+        self._current_row_id = None            # the row whose configuration is on the screen
+        self._next_row_id = 1
+        self._renaming = False                 # True while the code itself changes a row's text
+        self.mtp_device = ""                   # logger chosen over USB, e.g. "OBD_1757338"
+        self._send_task = None
+        self.setWindowTitle(APP_TITLE)
+        self.resize(1400, 950)
+        self._create_actions()
+
+        root = QWidget()
+        self.setCentralWidget(root)
+        root_layout = QHBoxLayout(root)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+        root_layout.addWidget(self._build_sidebar())
+        root_layout.addWidget(self._build_main_area(), 1)
+
+        self.apply_theme()
+        self._build_tree()
+
+    # ------------------------------------------------------------------
+    # Shortcuts (no toolbar, buttons live in the sidebar)
+    # ------------------------------------------------------------------
+    def _create_actions(self):
+        self.act_new = QAction("New", self)
+        self.act_new.setShortcut("Ctrl+N")
+        self.act_new.triggered.connect(self.on_new)
+        self.act_save = QAction("Export", self)
+        self.act_save.setShortcut("Ctrl+S")
+        self.act_save.triggered.connect(self.on_save)      # ask once, then silent
+        for a in (self.act_new, self.act_save):
+            self.addAction(a)
+
+    # ------------------------------------------------------------------
+    # Left sidebar
+    # ------------------------------------------------------------------
+    def _build_sidebar(self):
+        self.sidebar = QFrame()
+        self.sidebar.setObjectName("sidebar")
+        self.sidebar.setFixedWidth(300)
+        self.sidebar.setAttribute(Qt.WA_StyledBackground, True)
+        lay = QVBoxLayout(self.sidebar)
+        lay.setContentsMargins(20, 24, 20, 24)
+        lay.setSpacing(0)
+
+        self.brand_label = QLabel(APP_TITLE)
+        f = QFont()
+        f.setFamilies(["Segoe UI Variable Display", "Segoe UI", "Arial"])
+        f.setPointSizeF(12.5)
+        f.setWeight(QFont.DemiBold)
+        self.brand_label.setFont(f)
+        row = QHBoxLayout()
+        row.addWidget(self.brand_label)
+        row.addStretch(1)
+        lay.addLayout(row)
+        lay.addSpacing(14)
+
+        section_font = QFont()
+        section_font.setFamilies(["Segoe UI Variable Text", "Segoe UI", "Arial"])
+        section_font.setPointSizeF(10.5)
+        section_font.setWeight(QFont.DemiBold)
+        # ---- Section 1: imported files ----
+        self.imported_section = QFrame()
+        self.imported_section.setObjectName("importedSection")
+        self.imported_section.setAttribute(Qt.WA_StyledBackground, True)
+        il = QVBoxLayout(self.imported_section)
+        il.setContentsMargins(0, 0, 0, 0)
+        il.setSpacing(8)
+
+        self.imported_label = QLabel("IMPORTED FILES")
+        self.imported_label.setFont(section_font)
+        il.addWidget(self.imported_label)
+
+        self.imported_list = QListWidget()
+        self.imported_list.setObjectName("importedList")
+        self.imported_list.setUniformItemSizes(True)
+        self.imported_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.imported_list.setMinimumHeight(90)
+        self.imported_list.setMaximumHeight(120)
+        self.imported_list.setItemDelegate(NewFileDelegate(self.imported_list))
+        self.imported_list.itemClicked.connect(self.on_file_clicked)
+        self.imported_list.itemChanged.connect(self._on_row_edited)
+        sc = QShortcut(QKeySequence("Delete"), self.imported_list)
+        sc.setContext(Qt.WidgetShortcut)
+        sc.activated.connect(self.on_delete_selected_file)
+        self._press_item = None
+        self._press_was_selected = False
+        self.imported_list.viewport().installEventFilter(self)
+        il.addWidget(self.imported_list)
+
+        self.new_button = QPushButton("+  New")
+        self.new_button.setObjectName("newButton")
+        self.new_button.clicked.connect(self.on_new)
+        self.save_button = QPushButton("Export")
+        self.save_button.setObjectName("saveButton")
+        self.save_button.clicked.connect(self.on_save_as)   # always asks for a path
+        self.import_button = QPushButton("Import")
+        self.import_button.setObjectName("importButton")
+        self.import_button.clicked.connect(self.on_import)
+        for b in (self.new_button, self.save_button, self.import_button):
+            b.setCursor(Qt.PointingHandCursor)
+            b.setMinimumHeight(40)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+        btn_row.addWidget(self.new_button)
+        btn_row.addWidget(self.import_button)
+        btn_row.addWidget(self.save_button)
+        il.addLayout(btn_row)
+        lay.addWidget(self.imported_section, 0)
+        lay.addSpacing(12)
+
+        # ---- Settings entry (above the modes) ----
+        self.settings_section = QFrame()
+        self.settings_section.setObjectName("settingsSection")
+        self.settings_section.setAttribute(Qt.WA_StyledBackground, True)
+        sl = QVBoxLayout(self.settings_section)
+        sl.setContentsMargins(10, 6, 10, 6)
+        self.settings_tree = SettingsTree()
+        self.settings_tree.opened.connect(self.on_settings)
+        sl.addWidget(self.settings_tree)
+        lay.addWidget(self.settings_section, 0)
+        lay.addSpacing(12)
+
+        # ---- Section 2: configuration tree ----
+        self.config_section = QFrame()
+        self.config_section.setObjectName("configSection")
+        self.config_section.setAttribute(Qt.WA_StyledBackground, True)
+        cl = QVBoxLayout(self.config_section)
+        cl.setContentsMargins(10, 10, 10, 10)
+        cl.setSpacing(6)
+        self.config_label = QLabel("Modes")
+        self.config_label.setFont(section_font)
+        cl.addWidget(self.config_label)
+
+        self.new_tree = ModeTree()
+        self.new_tree.setHeaderHidden(True)
+        self.new_tree.setRootIsDecorated(False)
+        self.new_tree.setIndentation(16)
+        self.new_tree.setAnimated(True)
+        self.new_tree.setExpandsOnDoubleClick(False)
+        self.new_tree.setUniformRowHeights(True)
+        self.new_tree.setMouseTracking(True)
+        self.new_tree.viewport().setAttribute(Qt.WA_Hover, True)
+        self.new_tree.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.new_tree.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.tree_delegate = ModernTreeDelegate(self.new_tree)
+        self.new_tree.setItemDelegate(self.tree_delegate)
+        self.new_tree.itemClicked.connect(self.on_tree_item_clicked)
+        self.new_tree.modes_changed.connect(self.on_modes_changed)
+        self.new_tree.mode_toggled.connect(self.on_mode_toggled)
+        cl.addWidget(self.new_tree, 1)
+        lay.addWidget(self.config_section, 1)
+        return self.sidebar
+
+    # ------------------------------------------------------------------
+    # Right side: top bar + page area
+    # ------------------------------------------------------------------
+    def _build_main_area(self):
+        self.main_area = QWidget()
+        self.main_area.setObjectName("mainArea")
+        self.main_area.setAttribute(Qt.WA_StyledBackground, True)
+        ml = QVBoxLayout(self.main_area)
+        ml.setContentsMargins(24, 12, 24, 12)
+        ml.setSpacing(10)
+
+        topbar = QHBoxLayout()
+        title_group = QWidget()
+        tr = QHBoxLayout(title_group)
+        tr.setContentsMargins(0, 0, 0, 0)
+        tr.setSpacing(8)
+        self.title_label = QLabel(APP_TITLE)
+        self.title_label.setFont(QFont(FONT_FAMILY, 21, QFont.Bold))
+        self.title_label.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+        tr.addWidget(self.title_label, 0, Qt.AlignVCenter)
+
+        # optional on/off switch next to the heading (hidden by default)
+        self.edit_switch = SlideSwitch()
+        self.edit_switch.setToolTip("Switch on to edit this page")
+        self.edit_switch.toggled.connect(self.on_edit_switch_toggled)
+        self.edit_switch.setVisible(False)
+        tr.addWidget(self.edit_switch, 0, Qt.AlignVCenter)
+
+        topbar.addWidget(title_group)
+        topbar.addStretch(1)
+        self.target_selector = TargetSelector()
+        self.target_selector.drive_changed.connect(self.on_drive_changed)
+        self.target_selector.send_requested.connect(self.on_send_to_logger)
+        topbar.addWidget(self.target_selector)
+        topbar.addSpacing(10)
+
+        # Help, theme and logo buttons are not shown any more. They are still
+        # created (and hidden) because the theme code further down uses them.
+        self.help_button = QPushButton("?")
+        self.help_button.setObjectName("helpButton")
+        self.help_button.clicked.connect(self.on_help)
+
+        self.theme_toggle = QPushButton()
+        self.theme_toggle.setObjectName("themeToggle")
+        self.theme_toggle.setIconSize(QSize(18, 18))
+        self.theme_toggle.clicked.connect(self.toggle_theme)
+
+        self.brand_btn = QPushButton()
+        self.brand_btn.setObjectName("brandButton")
+        self.brand_btn.setIcon(logo_icon())
+        self.brand_btn.clicked.connect(self.on_logo_clicked)
+
+        for hidden in (self.help_button, self.theme_toggle, self.brand_btn):
+            hidden.setParent(self)
+            hidden.hide()
+
+        # Home button: the only button at the right end of the toolbar
+        self.home_button = HomeButton()
+        self.home_button.clicked.connect(self.home_requested)
+        topbar.addWidget(self.home_button)
+        ml.addLayout(topbar)
+
+        self.content_panel = QFrame()
+        self.content_panel.setObjectName("contentPanel")
+        self.content_panel.setAttribute(Qt.WA_StyledBackground, True)
+        self.content_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.content_panel.setMaximumHeight(500)
+        pl = QVBoxLayout(self.content_panel)
+        pl.setContentsMargins(12, 10, 12, 10)
+
+        self.content_stack = QStackedWidget()
+        self.content_stack.setVisible(False)      # empty until a page is opened
+        pl.addWidget(self.content_stack)
+
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(20)
+        shadow.setXOffset(0)
+        shadow.setYOffset(2)
+        shadow.setColor(QColor(16, 24, 40, 40))
+        self.content_panel.setGraphicsEffect(shadow)
+        self.problems_bar = ProblemsBar()
+        ml.addWidget(self.content_panel, 1)
+
+        return self.main_area
+
+    # ------------------------------------------------------------------
+    # Tree + pages  (EDIT THIS to define your own OBD sections)
+    # ------------------------------------------------------------------
+    def add_page(self, name, widget):
+        """Register a page. 'name' must match a tree item text."""
+        self.pages[name] = widget
+        self.content_stack.addWidget(widget)
+
+    def _build_tree(self):
+        """Modes list. Checkbox modes: description + PIDs. Others: description only."""
+        self.new_tree.add_modes(MODES)
+        c = DARK if self.dark_mode else LIGHT
+        for code in MODES:
+            if get_mode_info(code).selectable:
+                # checkbox mode: description and PID table on one page
+                page = PidPage(code)
+                page.pids_changed.connect(self.on_pids_changed)
+                page.frame_changed.connect(self.on_frame_changed)
+            else:
+                # no checkbox: description only
+                page = ModeInfoPage(code)
+            self.add_page(f"Mode ${code}", page)
+        for page in self.pages.values():
+            page.apply_theme(c)
+        self.settings_page = SettingsPage()
+        self.settings_page.settings_changed.connect(self.on_settings_changed)
+        self.settings_page.apply_theme(c)
+        self.add_page("Settings", self.settings_page)
+
+    def on_modes_changed(self, modes):
+        self.selected_modes = modes                  # e.g. ["01", "05"]
+        self.statusBar().showMessage(
+            "Selected modes: " + (", ".join(modes) or "none"), 3000)
+        self._sync_config()
+
+    def _show_mode_page(self, code):
+        name = f"Mode ${code}"
+        page = self.pages.get(name)
+        if page is None:
+            return
+        self._current_page = name
+        self.title_label.setText(name)
+        self.content_stack.setVisible(True)
+        self.content_stack.setCurrentWidget(page)
+
+    def _refresh_pages_enabled(self):
+        """A mode's PIDs can be ticked only while the mode's own box is ticked."""
+        for code in MODES:
+            page = self.pages.get(f"Mode ${code}")
+            if hasattr(page, "set_selection_enabled"):
+                page.set_selection_enabled(code in self.selected_modes)
+
+    def on_mode_toggled(self, code, checked):
+        """Box ticked or unticked: enable or disable that PID table, show the page."""
+        page = self.pages.get(f"Mode ${code}")
+        if hasattr(page, "set_selection_enabled"):
+            page.set_selection_enabled(checked)
+        self._show_mode_page(code)
+
+    def on_settings(self):
+        page = self.pages["Settings"]
+        self._current_page = "Settings"
+        self.title_label.setText("Settings")
+        self.content_stack.setVisible(True)
+        self.content_stack.setCurrentWidget(page)
+        self.new_tree.clearSelection()
+
+    def on_settings_changed(self, settings):
+        self.base_config = settings
+        self._sync_config()
+
+
+    def on_frame_changed(self, frame):
+        self.frame_02 = frame
+        self._sync_config()
+
+    def on_drive_changed(self, drive):
+        if drive.startswith(MTP_PREFIX):          # logger on USB: sent with the button
+            self.mtp_device = drive[len(MTP_PREFIX):]
+            self.config_sync.drive = ""
+        else:                                     # drive letter: written after every change
+            self.mtp_device = ""
+            self.config_sync.drive = drive
+        self._sync_config()
+
+    def on_send_to_logger(self):
+        """Send config.json to the logger's SD card over USB, then check it."""
+        drive = self.target_selector.current_drive()
+        if drive.startswith(MTP_PREFIX):
+            self.mtp_device = drive[len(MTP_PREFIX):]
+        if not self.mtp_device:
+            QMessageBox.information(
+                self, "No logger selected",
+                "Select a USB logger in the Device dropdown, then click Upload.")
+            return
+        if not self.target_selector.storage_ready():
+            QMessageBox.warning(
+                self, "SD card not available",
+                f'The logger "{self.mtp_device}" is connected, but its SD card '
+                "is not available yet.\n\n"
+                "The logger only shows the SD card after logging stops and "
+                "buffered data is saved. Stop logging on the device, wait a "
+                "moment, then try Upload again.")
+            return
+        config = self._build_config()
+        issues = validate(config)
+        if issues:
+            lines = "\n".join(f"- {i.field}: {i.message} {i.fix}" for i in issues[:6])
+            QMessageBox.warning(self, "Cannot send yet", lines)
+            return
+        answer = QMessageBox.question(
+            self, "Send to logger",
+            f'Send the current config.json to "{self.mtp_device}"?',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if answer != QMessageBox.Yes:
+            return
+        self.target_selector.set_sending(True)
+        self.statusBar().showMessage(f"Sending config.json to {self.mtp_device} ...")
+        task = MtpSendTask(self.mtp_device, to_json_text(config))
+        task.signals.done.connect(self._on_send_done)
+        self._send_task = task
+        QThreadPool.globalInstance().start(task)
+
+    def _on_send_done(self, result):
+        self.target_selector.set_sending(False)
+        self.target_selector.show_result(result.ok)
+        if result.ok:
+            self.statusBar().showMessage(result.message, 8000)
+            QMessageBox.information(self, "Transfer complete", result.message)
+        else:
+            self.statusBar().showMessage("Transfer failed.", 8000)
+            QMessageBox.warning(self, "Transfer failed", result.message)
+
+    def _build_config(self):
+        # ticked PIDs keep their remembered interval; new ones get the default
+        pids = {
+            mode: {ident: self.pid_intervals.get(mode, {}).get(ident, DEFAULT_INTERVAL_MS)
+                   for ident in idents}
+            for mode, idents in self.selected_pids.items()
+        }
+        return build_config(self.selected_modes, pids,
+                            self.base_config, self.frame_02)
+    
+    def _sync_config(self):
+        """After every change: check the configuration. If a logger drive is chosen,
+        keep its config.json up to date. The Save button handles the saved file."""
+        config = self._build_config()
+        issues = validate(config)
+        if issues:
+            self.problems_bar.show_issues(issues)
+            return
+        if self.config_sync.drive:                      # logger chosen: write to it
+            result = self.config_sync.sync(config)
+            if result.failed:
+                target, error = result.failed[0]
+                self.problems_bar.show_failure(target, error)
+                return
+            logger_file = result.saved[0]
+            if self.save_path:
+                self.problems_bar.show_idle(
+                    f"Saved to the logger: {os.path.normpath(logger_file)}. "
+                    f"Click Export to update {os.path.normpath(self.save_path)}.")
+            else:
+                self.problems_bar.show_saved(logger_file)
+            return
+        if self.save_path:
+            self.problems_bar.show_idle(
+                f"Not exported yet. Click Export to update {os.path.normpath(self.save_path)}")
+        else:
+            self.problems_bar.show_idle(
+                "Ready. Click Export to choose where to export config.json.")
+    def on_pids_changed(self, mode, pids):
+        self.selected_pids[mode] = pids
+        self.statusBar().showMessage(
+            f"Mode {mode}: " + (", ".join(pids) or "no PIDs selected"), 3000)
+        self._sync_config()
+
+    def on_tree_item_clicked(self, item, column):
+        self.settings_tree.clearSelection()
+        if item.childCount() > 0:
+            item.setExpanded(not item.isExpanded())
+            return
+
+        # Mode $05 and $08 → do absolutely nothing
+        code = item.data(0, Qt.UserRole)
+        if code in ("05", "08"):
+            return
+
+        if item.text(0) == "Generate Report":
+            self.on_generate()
+            return
+
+        self._show_mode_page(code)
+
+    def clear_page_area(self):
+        """Empty right-hand side (no page open)."""
+        self._current_page = None
+        self.title_label.setText(APP_TITLE)
+        self.edit_switch.setVisible(False)
+        self.content_stack.setVisible(False)
+        self.new_tree.clearSelection()
+
+    # ------------------------------------------------------------------
+    # Files list behaviour (UI only)
+    # ------------------------------------------------------------------
+    def _add_file_row(self, path):
+        item = QListWidgetItem(os.path.basename(path))
+        item.setData(Qt.UserRole, path)
+        item.setData(ROW_ID, self._new_row_id())
+        self.imported_list.addItem(item)
+        self.imported_list.setCurrentItem(item)
+        self.imported_files.append(path)
+        self._current_row_id = item.data(ROW_ID)          # this file is now on the screen
+
+    def on_file_clicked(self, item):
+        """Show the configuration of the clicked row: what you left on it earlier, or its file."""
+        row_id = item.data(ROW_ID)
+        if row_id == self._current_row_id:
+            return                                # already on the screen
+        state = self._row_states.get(row_id)
+        path = item.data(Qt.UserRole)
+        if state is not None:                     # you were here before: bring it back
+            self._leave_current_row()
+            self._reset_screen()
+            self._apply_state(state)
+        elif path:                                # a file that was not opened yet: read it
+            if not self._load_config_file(path):
+                self._select_current_row()        # it could not be read: stay where we were
+                return
+        else:                                     # a new row nobody has filled yet
+            self._leave_current_row()
+            self._reset_screen()
+        self._current_row_id = row_id
+        self.statusBar().showMessage(f"Opened {item.text()}", 3000)
+
+    def on_delete_selected_file(self):
+        item = self.imported_list.currentItem()
+        if item is None:
+            return
+        path = item.data(Qt.UserRole)
+        name = os.path.basename(path) if path else item.text()
+        if QMessageBox.question(
+                self, "Remove file", f"Remove '{name}' from the list?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        ) != QMessageBox.Yes:
+            return
+        self.imported_list.takeItem(self.imported_list.row(item))
+        if path in self.imported_files:
+            self.imported_files.remove(path)
+        row_id = item.data(ROW_ID)
+        self._row_states.pop(row_id, None)
+        if row_id == self._current_row_id or self._current_row_id is None:
+            self._current_row_id = None           # the removed row was on the screen
+            self._reset_screen()                  # back to the default configuration
+            self.imported_list.setCurrentRow(-1)
+        self.statusBar().showMessage(f"Removed '{name}'", 3000)
+    def eventFilter(self, obj, event):
+        """Click on the trash icon of the selected row removes the file."""
+        if obj is self.imported_list.viewport():
+            if event.type() == QEvent.MouseButtonPress:
+                self._press_item = self.imported_list.itemAt(event.position().toPoint())
+                self._press_was_selected = bool(
+                    self._press_item and self._press_item.isSelected())
+            elif event.type() == QEvent.MouseButtonRelease:
+                pos = event.position().toPoint()
+                item = self.imported_list.itemAt(pos)
+                if (item is not None and item is self._press_item
+                        and self._press_was_selected and item.data(Qt.UserRole)):
+                    rect = NewFileDelegate.trash_rect(
+                        self.imported_list.visualItemRect(item))
+                    if rect.contains(pos):
+                        QTimer.singleShot(0, self.on_delete_selected_file)
+        return super().eventFilter(obj, event)
+
+    # ------------------------------------------------------------------
+    # Button handlers: put your own logic here
+    # ------------------------------------------------------------------
+    def on_new(self):
+        """New button: remember the row on the screen, start a clean configuration and add a
+        row where the file name is typed."""
+        self._leave_current_row()
+        self._reset_screen()
+        self._add_new_row()
+
+    # ---- rows of the files list: each one remembers its own configuration --------------
+    def _new_row_id(self):
+        row_id = self._next_row_id
+        self._next_row_id += 1
+        return row_id
+
+    def _row_item(self, row_id):
+        for i in range(self.imported_list.count()):
+            item = self.imported_list.item(i)
+            if item.data(ROW_ID) == row_id:
+                return item
+        return None
+
+    def _find_row(self, path):
+        for i in range(self.imported_list.count()):
+            item = self.imported_list.item(i)
+            if item.data(Qt.UserRole) == path:
+                return item
+        return None
+
+    def _select_current_row(self):
+        """Move the highlight of the list back to the row that is on the screen."""
+        item = self._row_item(self._current_row_id)
+        if item is not None:
+            self.imported_list.setCurrentItem(item)
+        else:
+            self.imported_list.setCurrentRow(-1)
+
+    def _capture_state(self):
+        """Everything on the screen that belongs to one configuration."""
+        state = {"settings": replace(self.base_config)}
+        for name in SCREEN_STATE:
+            if hasattr(self, name):
+                state[name] = copy.deepcopy(getattr(self, name))
+        return state
+
+    def _apply_state(self, state):
+        """Show a remembered configuration (call _reset_screen() first)."""
+        self.settings_page.set_settings(state["settings"])
+        self.base_config = replace(state["settings"])
+        for name in SCREEN_STATE:
+            if name in state:
+                setattr(self, name, copy.deepcopy(state[name]))
+        self.new_tree.set_checked_modes(self.selected_modes)
+        for mode, chosen in self.selected_pids.items():
+            page = self.pages.get(f"Mode ${mode}")
+            if page is not None:
+                page.set_selection(list(chosen), self.frame_02)
+        self._refresh_pages_enabled()
+        self._sync_config()
+
+    def _leave_current_row(self):
+        """Remember the configuration of the row on the screen before another one replaces it."""
+        if self._current_row_id is not None:
+            self._row_states[self._current_row_id] = self._capture_state()
+
+    def _add_new_row(self):
+        """A row for the new configuration. The file name is typed straight into the list."""
+        taken = [self.imported_list.item(i).text() for i in range(self.imported_list.count())]
+        item = QListWidgetItem(clean_file_name(DEFAULT_NAME, taken))   # config.json
+        item.setData(Qt.UserRole, "")                      # no file on disk yet
+        item.setData(ROW_ID, self._new_row_id())
+        item.setData(ROW_NAME, item.text())
+        item.setFlags(item.flags() | Qt.ItemIsEditable)
+        self.imported_list.addItem(item)
+        self.imported_list.setCurrentItem(item)
+        self.imported_list.scrollToItem(item)
+        self._current_row_id = item.data(ROW_ID)
+        self.imported_list.editItem(item)                  # type the file name now
+        editor = self.focusWidget()                        # the name box that just opened
+        if editor is not None and hasattr(editor, "selectAll"):
+            editor.selectAll()                             # typing replaces config.json
+
+    def _on_row_edited(self, item):
+        """A name was typed into a new row: make it a safe, unique .json name."""
+        if self._renaming or not (item.flags() & Qt.ItemIsEditable):
+            return
+        if item.text() == item.data(ROW_NAME):
+            return                                         # nothing new was typed
+        taken = [self.imported_list.item(i).text()
+                 for i in range(self.imported_list.count())
+                 if self.imported_list.item(i).data(ROW_ID) != item.data(ROW_ID)]
+        name = clean_file_name(item.text(), taken)
+        self._renaming = True
+        item.setText(name)
+        item.setData(ROW_NAME, name)
+        self._renaming = False
+        self.statusBar().showMessage(f"File name: {name}", 3000)
+
+    def _suggested_file_name(self):
+        """The name typed in the list for a new row, otherwise config.json."""
+        item = self._row_item(self._current_row_id)
+        if item is not None and not item.data(Qt.UserRole):
+            return item.text()
+        return "config.json"
+
+    def _link_row_to_file(self, path):
+        """After the first export, the new row stands for the file that was written."""
+        item = self._row_item(self._current_row_id)
+        if item is None or item.data(Qt.UserRole):
+            return
+        self._renaming = True
+        item.setFlags(item.flags() & ~Qt.ItemIsEditable)   # the name is now the file's name
+        item.setData(Qt.UserRole, path)
+        item.setText(os.path.basename(path))
+        self._renaming = False
+        if path not in self.imported_files:
+            self.imported_files.append(path)
+
+    def _reset_screen(self):
+        """Settings, modes, PIDs and intervals go back to the defaults."""
+        self.settings_page.set_settings(LoggerConfig())
+        self.base_config = LoggerConfig()
+        self.frame_02 = "00"
+        self.save_path = ""
+        self.new_tree.uncheck_all()
+        for page in self.pages.values():
+            if hasattr(page, "reset"):
+                page.reset()
+        self.selected_modes = []
+        self.selected_pids = {}
+        self.pid_intervals = {}
+        self.settings_tree.clearSelection()
+        self.clear_page_area()
+        self.statusBar().showMessage(
+            "New configuration. Everything is back to the defaults.", 4000)
+        self.problems_bar.show_idle("New configuration. Nothing selected yet.")
+
+    def on_save(self):
+        """First time: ask for a path. After that: silently overwrite the same file."""
+        if not self.save_path:
+            self.on_save_as()
+            return
+        self._write_config(self.save_path)
+
+    def on_save_as(self):
+        """Always ask for a path."""
+        start = self.save_path or self._suggested_file_name()
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export config.json", start, "JSON files (*.json);;All files (*)")
+        if path and self._write_config(path):
+            self.save_path = path
+            self._link_row_to_file(path)
+
+    def _write_config(self, path):
+        """Writes the file. Returns True when it worked."""
+        try:
+            saved = save_config_file(self._build_config(), path)
+        except InvalidConfigError as error:
+            self.problems_bar.show_issues(error.issues)
+            lines = "\n".join(f"- {i.field}: {i.message} {i.fix}" for i in error.issues[:6])
+            QMessageBox.warning(self, "Cannot export yet", lines)
+            return False
+        except OSError as error:
+            self.problems_bar.show_failure(path, error)
+            QMessageBox.warning(self, "Could not export", f"{path}\n\n{error}")
+            return False
+        self.problems_bar.show_saved(str(saved))
+        return True
+    def on_import(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import config.json", "", "Config files (*.json);;All files (*)")
+        if path and self._load_config_file(path):
+            if path in self.imported_files:           # already listed: that row shows the fresh file
+                item = self._find_row(path)
+                if item is not None:
+                    self._row_states.pop(item.data(ROW_ID), None)
+                    self._current_row_id = item.data(ROW_ID)
+                    self.imported_list.setCurrentItem(item)
+            else:
+                self._add_file_row(path)
+    def _load_config_file(self, path):
+        """Read a config.json and fill in the screens. Returns True when it worked."""
+        name = os.path.basename(path)
+        try:
+            config = import_config(path)
+        except (OSError, ConfigFormatError) as error:
+            QMessageBox.warning(self, "Cannot import", f"{name}\n\n{error}")
+            return False
+        issues = validate(config)
+        if issues:
+            lines = "\n".join(f"- {i.field}: {i.message} {i.fix}" for i in issues[:6])
+            more = f"\n(and {len(issues) - 6} more)" if len(issues) > 6 else ""
+            QMessageBox.warning(self, "Cannot import",
+                                f"{name} has problems:\n{lines}{more}")
+            return False
+
+        selection = selection_from_config(config)
+        self._leave_current_row()                      # remember the row we are leaving
+        self._reset_screen()                           # start from a clean screen
+        self.settings_page.set_settings(config)
+        self.base_config = replace(config, requests=[])
+        self.new_tree.set_checked_modes(selection.modes)
+        for mode, chosen in selection.pids.items():
+            page = self.pages.get(f"Mode ${mode}")
+            if page is not None:
+                page.set_selection(list(chosen), selection.frame)
+        self.selected_modes = list(selection.modes)
+        self.selected_pids = {m: list(c) for m, c in selection.pids.items()}
+        self.pid_intervals = {m: dict(c) for m, c in selection.pids.items()}
+        self.frame_02 = selection.frame
+        self._refresh_pages_enabled()
+
+        loaded = len(config.requests) - len(selection.skipped)
+        if selection.skipped:
+            lines = "\n".join(f"- {text}: {why}" for text, why in selection.skipped)
+            QMessageBox.information(
+                self, "Unsupported requests were not imported",
+                "These requests are not supported by this tool, so they were NOT "
+                "imported and will not be in config.json when it is saved:\n" + lines)      
+            self.problems_bar.show_idle(
+                f"Imported {name}. Not exported yet: change something to export.")
+        else:
+            self._sync_config()
+        self.statusBar().showMessage(
+            f"Imported {name}: {loaded} request(s) loaded.", 6000)
+        return True
+    
+    def on_generate(self):
+        self.statusBar().showMessage("Generate (add your code)", 3000)
+
+    def on_edit_switch_toggled(self, on):
+        pass
+
+    def on_help(self):
+        QMessageBox.information(self, "Help", "Add your help text here.")
+
+    def on_logo_clicked(self):
+        QDesktopServices.openUrl(QUrl(COMPANY_URL))
+
+
+    # ------------------------------------------------------------------
+    # Theme
+    # ------------------------------------------------------------------
+    def toggle_theme(self):
+        self.dark_mode = not self.dark_mode
+        self.apply_theme()
+
+    def apply_theme(self):
+        c = DARK if self.dark_mode else LIGHT
+        self.sidebar.setStyleSheet(
+            f"#sidebar {{ background-color: {c['bg_panel']};"
+            f" border-right: 1px solid {c['border']}; }}")
+        self.brand_label.setStyleSheet(f"color: {c['text_primary']};")
+        self.imported_label.setStyleSheet(
+            f"color: {c['text_secondary']}; font-size: 9pt; font-weight: 700;")
+        self.config_label.setStyleSheet(
+            f"color: {c['text_primary']}; font-weight: 600;")
+
+        self.imported_section.setStyleSheet(f"""
+            #importedSection {{ background: transparent; border: none; }}
+            QPushButton {{
+                color: {c['text_primary']}; background-color: {c['btn_bg']};
+                border: 1px solid {c['btn_border']}; border-radius: 12px;
+                padding: 0 14px; }}
+            QPushButton:hover {{ border: 1px solid {c['accent_blue']}; }}
+            QPushButton:pressed {{ background-color: {c['border']}; }}
+            QPushButton#newButton {{
+                background-color: {c['bg_main']}; border: 1px solid {c['border']};
+                font-family: "Segoe UI"; font-size: 10pt; font-weight: 400; }}
+            QPushButton#newButton:hover {{ border: 1px solid {c['accent_blue']}; }}
+            QPushButton#saveButton, QPushButton#importButton {{
+                font-family: "Segoe UI"; font-size: 9pt; font-weight: 700; }}
+        """)
+        self.config_section.setStyleSheet(
+            f"#configSection {{ background-color: {c['bg_main']};"
+            f" border: 2px solid {c['border']}; border-radius: {RADIUS_LG}px; }}")
+        self.main_area.setStyleSheet(
+            f"#mainArea {{ background-color: {c['bg_main']}; }}")
+        self.title_label.setStyleSheet(f"color: {c['text_primary']};")
+        self.edit_switch.set_colors(c['accent_blue'], c['btn_border'], "#FFFFFF")
+
+        for name in ("themeToggle", "helpButton"):
+            w = self.theme_toggle if name == "themeToggle" else self.help_button
+            extra = f"color: {c['text_primary']};" if name == "helpButton" else ""
+            w.setStyleSheet(f"""
+                #{name} {{ background-color: {c['bg_panel']}; {extra}
+                           border: 1px solid {c['border']};
+                           border-radius: {RADIUS_SM}px; }}
+                #{name}:hover {{ border: 1px solid {c['accent_blue']}; }}
+            """)
+
+        # Logo: original gold colours in both themes, no border or background.
+        self.brand_btn.setIcon(logo_icon(white=False))
+        self.brand_btn.setStyleSheet("""
+            #brandButton { background-color: transparent; border: none;
+                           padding: 6px 12px; }
+            #brandButton:hover, #brandButton:pressed {
+                background-color: transparent; border: none; }
+        """)
+        self.theme_toggle.setIcon(make_theme_icon(self.dark_mode, c["toggle_icon"]))
+
+        self.content_panel.setStyleSheet(
+            f"#contentPanel {{ background-color: {c['bg_panel']};"
+            f" border: 1px solid {c['border']}; border-radius: {RADIUS_LG}px; }}")
+        self.imported_list.setStyleSheet(f"""
+            QListWidget {{ background-color: {c['list_bg']};
+                border: 1px solid {c['btn_border']}; border-radius: {RADIUS_LG}px;
+                outline: 0; padding: 3px; font-size: 11pt; }}
+            QListWidget::item {{ color: {c['text_primary']}; border-radius: 5px;
+                padding: 0px 40px 0px 12px; }}
+            QListWidget::item:hover {{ background-color: {c['border']}; }}
+            QListWidget::item:selected {{ background-color: {c['accent_blue']};
+                color: #FFFFFF; }}
+            QListWidget QLineEdit {{ color: {c['text_primary']};
+                background-color: {c['list_bg']}; border: 1px solid {c['accent_blue']};
+                border-radius: 5px; padding: 0px 6px; }}
+        """)
+        self.new_tree.setStyleSheet(
+            "QTreeWidget { background-color: transparent; border: none; outline: 0; }")
+        self.tree_delegate.set_colors(c)
+        self.new_tree.viewport().update()
+        self.statusBar().setStyleSheet(
+            f"QStatusBar {{ background-color: {c['bg_panel']};"
+            f" color: {c['text_secondary']}; }}")
+        for page in self.pages.values():
+            page.apply_theme(c)
+        self.target_selector.apply_theme(c)
+        self.settings_section.setStyleSheet(
+            f"#settingsSection {{ background-color: {c['bg_main']};"
+            f" border: 2px solid {c['border']}; border-radius: {RADIUS_LG}px; }}")
+        self.settings_tree.apply_theme(c)
+        self.problems_bar.apply_theme(c)
