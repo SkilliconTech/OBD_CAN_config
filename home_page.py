@@ -64,6 +64,7 @@ class HomePage(QWidget):
 
     obd_requested = Signal()
     can_requested = Signal()
+    theme_changed = Signal(bool)        # True = dark
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -349,6 +350,7 @@ class HomePage(QWidget):
     def toggle_theme(self):
         self.dark_mode = not self.dark_mode
         self.apply_theme()
+        self.theme_changed.emit(self.dark_mode)
 
     def apply_theme(self):
         c = DARK if self.dark_mode else LIGHT
