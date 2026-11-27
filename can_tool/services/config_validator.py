@@ -120,4 +120,39 @@ CLASSIC_BITRATES = {
     "500.000 kbits/s": ("75%",),
     "1.000 Mbits/s": ("75%",),
 }
+
 CLASSIC_SJW = ("1", "2", "3", "4")
+
+
+def validate_filters(rules):
+    require(isinstance(rules, list), "Filters must be a list")
+    names = set()
+    for rule in rules:
+        validate_rule(rule)
+        require(rule["filter_id"] not in names, "Duplicate filter name")
+        names.add(rule["filter_id"])
+
+
+def validate_classic_can(settings):
+    check_keys(settings, "bitrate startup_delay_ms run_duration_ms",
+               "Classic CAN")
+    require(type(settings["bitrate"]) is int
+            and settings["bitrate"] in CLASSIC_BITRATES,
+            "Bitrate must be one of: "
+            + ", ".join(str(b) for b in CLASSIC_BITRATES))
+    check_int(settings["startup_delay_ms"], 0, 600000, "Startup delay")
+    check_int(settings["run_duration_ms"], 0, 86400000, "Run duration")
+
+
+def validate_complete_config(data):
+    from can_tool.services.config_version import check_config_version
+
+    check_config_version(data)      # also checks that data is an object
+    check_keys(data, "version operating_mode bitrate startup_delay_ms "
+                     "run_duration_ms filters", "Configuration")
+    require(data["operating_mode"] == "can", 'operating_mode must be "can"')
+    validate_classic_can({k: data[k] for k in
+                          ("bitrate", "startup_delay_ms", "run_duration_ms")})
+    check_keys(data["filters"], "classic_can", "Filters")
+    validate_filters(data["filters"]["classic_can"])
+    return True
