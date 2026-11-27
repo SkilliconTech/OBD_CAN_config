@@ -292,7 +292,7 @@ class ConfigurationTool(QMainWindow):
         imported_layout.addWidget(self.imported_list)
         imported_layout.addWidget(self.imported_list)
 
-        # New / Save / Import buttons under the list
+        # New / Export / Import buttons under the list
         button_row = QHBoxLayout()
         button_row.setSpacing(10)
 
@@ -300,20 +300,22 @@ class ConfigurationTool(QMainWindow):
         self.new_button.setObjectName("newButton")
         self.new_button.clicked.connect(self.on_new)
 
-        self.save_button = QPushButton("Export")          # label change
-        self.save_button.setObjectName("saveButton")      # keep objectName if stylesheet uses it
+        self.save_button = QPushButton("Export")
+        self.save_button.setObjectName("saveButton")
         self.save_button.setToolTip("Export configuration to a file")
-        self.save_button.clicked.connect(self.on_export)  # NEW method (always asks for path)
+        self.save_button.clicked.connect(self.on_export)
 
-        # DELETE: save_arrow_button, _save_menu, and everything that builds the split button
+        self.import_button = QPushButton("Import")
+        self.import_button.setObjectName("importButton")
+        self.import_button.clicked.connect(self.on_import)
 
         for button in (self.new_button, self.save_button, self.import_button):
-        button.setCursor(Qt.PointingHandCursor)
-        button.setMinimumHeight(40)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setMinimumHeight(40)
 
         button_row.addWidget(self.new_button)
         button_row.addWidget(self.import_button)
-        button_row.addWidget(self.save_button)            # plain button, no arrow group
+        button_row.addWidget(self.save_button)
 
         imported_layout.addLayout(button_row)
         sidebar_layout.addWidget(self.imported_section, 0)
@@ -542,17 +544,14 @@ class ConfigurationTool(QMainWindow):
         self.act_open.setShortcut("Ctrl+O")
         self.act_open.triggered.connect(self.on_open)
 
-        self.act_save = QAction("Save", self)          # keep name "Save" for Ctrl+S semantics
+        self.act_save = QAction("Save", self)
         self.act_save.setShortcut("Ctrl+S")
         self.act_save.triggered.connect(self.on_save)
-
-        # DELETE the whole act_save_as block (action + shortcut + connect)
 
         self.act_import = QAction("Import", self)
         self.act_import.triggered.connect(self.on_import)
 
-        for action in (self.act_new, self.act_open,
-                       self.act_save, self.act_save_as):
+        for action in (self.act_new, self.act_open, self.act_save):
             self.addAction(action)
         
 
@@ -939,38 +938,25 @@ class ConfigurationTool(QMainWindow):
             self._show_device_tree()
             self.statusBar().showMessage(f"Opened: {path}", 3000)
 
+    def on_save(self):
+        """Ctrl+S: silent save if path exists, otherwise ask for path."""
+        # file created with New but not saved yet -> ask for the folder
+        if self.current_file_path is None and self._draft_item is not None:
+            self._save_draft()
+            return
+
+        # First time: no path yet, so ask for it. After that: save silently.
+        if self.current_file_path is None:
+            self.on_export()
+            return
+
+        if self._write_json(self.current_file_path):
+            self.statusBar().showMessage(
+                f"Saved: {self.current_file_path}", 3000
+            )
+
     def on_export(self):
-     """Always show a file dialog and write the config there."""
-     # Draft that was never saved: same “choose folder” flow is fine
-     if self.current_file_path is None and self._draft_item is not None:
-        self._save_draft()
-        return
-
-     if self.current_file_path:
-        start = self.current_file_path
-     elif self._last_folder:
-        start = os.path.join(self._last_folder, "config.json")
-     else:
-        start = "config.json"
-
-     path, _ = QFileDialog.getSaveFileName(
-        self, "Export configuration", start, JSON_FILTER
-     )
-     if not path:
-        return
-
-     if not os.path.splitext(path)[1]:
-        path += ".json"
-     path = os.path.normpath(os.path.abspath(path))
-
-     if self._write_json(path):
-        self.current_file_path = path
-        self._last_folder = os.path.dirname(path)
-        self._update_title()
-        self._add_imported_file(path)
-        self.statusBar().showMessage(f"Exported: {path}", 3000)
-
-    def on_save_as(self):
+        """Export button: always ask for a path."""
         # New file that was never saved: same "choose folder" dialog
         if self.current_file_path is None and self._draft_item is not None:
             self._save_draft()
@@ -985,7 +971,7 @@ class ConfigurationTool(QMainWindow):
             start = "config.json"
 
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save As", start, JSON_FILTER
+            self, "Export configuration", start, JSON_FILTER
         )
         if not path:
             return
@@ -999,7 +985,7 @@ class ConfigurationTool(QMainWindow):
             self._last_folder = os.path.dirname(path)
             self._update_title()
             self._add_imported_file(path)   # shows it in the list
-            self.statusBar().showMessage(f"Saved: {path}", 3000)
+            self.statusBar().showMessage(f"Exported: {path}", 3000)
 
     def eventFilter(self, obj, event):
         if obj is self.imported_list.viewport():
@@ -1086,7 +1072,6 @@ class ConfigurationTool(QMainWindow):
                 f"Removed from list: {name}", 3000
             )
 
-
     def on_import(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Import JSON", "", JSON_FILTER
@@ -1115,7 +1100,8 @@ class ConfigurationTool(QMainWindow):
             "Toolbar\n"
             "  New (Ctrl+N)  start a new configuration\n"
             "  Open (Ctrl+O)  open a saved configuration\n"
-            "  Save (Ctrl+S)  save; the arrow next to it gives Save As\n"
+            "  Export  always choose a location and write the file\n"
+            "  Save (Ctrl+S)  save to the current file (asks for path if none yet)\n"
             "  Import  load settings from a JSON file\n\n"
             "Tree on the left\n"
             "  Bus Configuration > Classic CAN  bus settings\n"
@@ -1397,42 +1383,6 @@ class ConfigurationTool(QMainWindow):
                 font-family: "Segoe UI";     /* IMPORT font   */
                 font-size: 9pt;             /* IMPORT size   */
                 font-weight: 700;            /* IMPORT weight */
-            }}
-            QPushButton#saveButton {{
-                padding: 0 8px;
-                border-top-right-radius: 0px;
-                border-bottom-right-radius: 0px;
-            }}
-            QPushButton#saveArrowButton {{
-                padding: 0px;
-                font-size: 11pt;
-                font-weight: 700;
-                border-left: none;
-                border-top-left-radius: 0px;
-                border-bottom-left-radius: 0px;
-            }}
-            QPushButton#saveArrowButton:hover {{
-                border: 1px solid {c['accent_blue']};
-                border-left: none;
-            }}
-            """
-        )
-        self._save_menu.setStyleSheet(
-            f"""
-            QMenu {{
-                background-color: {c['bg_panel']};
-                color: {c['text_primary']};
-                border: 1px solid {c['btn_border']};
-                padding: 6px;
-            }}
-            QMenu::item {{
-                padding: 8px 28px 8px 14px;
-                border-radius: 6px;
-                font-size: 11pt;
-            }}
-            QMenu::item:selected {{
-                background-color: {c['accent_blue']};
-                color: #FFFFFF;
             }}
             """
         )
