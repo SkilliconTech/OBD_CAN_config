@@ -6,16 +6,6 @@ DEFAULT_CLASSIC_CAN = {
     "enabled": False,
 }
 
-# Default CAN FD settings
-DEFAULT_CANFD = {
-    "arbitration_bitrate": "500 kbits/s",
-    "arbitration_sp": "80%",
-    "arbitration_sjw": "1",
-    "data_bitrate": "500 kbits/s",
-    "data_sp": "80.00%",
-    "data_sjw": "1",
-    "enabled": False,
-}
 
 # Configuration file extensions
 PROJECT_EXT = ".ccfg"
@@ -26,6 +16,4 @@ JSON_FILTER = "JSON files (*.json);;All files (*)"
 
 LOG_PAGES = {
     "Filters": "filters",
-    "Triggers": "triggers",
-    "Log Files": "logfiles",
 }
