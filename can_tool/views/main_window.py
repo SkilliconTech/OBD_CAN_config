@@ -2,8 +2,9 @@ import os
 import json
 import copy
 
-from PySide6.QtCore import Qt, QSize, QUrl, QTimer,QFile,QEvent, QRect, Signal, QThreadPool
+from PySide6.QtCore import Qt, QSize, QUrl, QTimer,QFile,QEvent, QRect, QRectF, Signal, QThreadPool
 from home_button import HomeButton
+from obd_tool.services.file_names import clean_file_name
 from obd_tool.models import config_rules as _logger_rules
 from obd_tool.services.mtp_device import MTP_PREFIX
 from obd_tool.views.mtp_tasks import MtpSendTask
@@ -20,7 +21,8 @@ from PySide6.QtGui import (
     QDesktopServices,
     QShortcut,
     QKeySequence,
-    QPainter
+    QPainter,
+    QPen
 )
 
 from PySide6.QtWidgets import (
@@ -92,7 +94,7 @@ from can_tool.app.controller import AppController
 from can_tool.services.config_repository import JsonConfigurationRepository
 from can_tool.views.slide_switch import SlideSwitch
 
-
+UNSAVED_RED = "#D64545"       # rows of files that are not saved to disk yet
 class NewFileDelegate(QStyledItemDelegate):
     """Row height, 'new file' typing box, and the trash icon on the
     selected row of the imported files list."""
@@ -120,6 +122,27 @@ class NewFileDelegate(QStyledItemDelegate):
         )
 
     def paint(self, painter, option, index):
+        unsaved = not index.data(Qt.UserRole)                  # never saved to disk
+        selected = bool(option.state & QStyle.State_Selected)
+
+        if unsaved:                                            # red, selected or not
+            painter.save()
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            bg = QColor(UNSAVED_RED)
+            bg.setAlpha(70 if selected else 40)                # a bit stronger when selected
+            painter.setPen(QPen(QColor(UNSAVED_RED), 1.2) if selected else Qt.NoPen)
+            painter.setBrush(bg)
+            painter.drawRoundedRect(
+                QRectF(option.rect).adjusted(0.6, 0.6, -0.6, -0.6), 5, 5)
+            painter.setPen(QColor(UNSAVED_RED))                # red text
+            painter.setFont(option.font)
+            text_rect = option.rect.adjusted(12, 0, -40, 0)
+            text = painter.fontMetrics().elidedText(
+                str(index.data(Qt.DisplayRole) or ""), Qt.ElideRight, text_rect.width())
+            painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, text)
+            painter.restore()
+            return
+
         super().paint(painter, option, index)
         # icon only on the selected row of a real (saved/imported) file
         if (option.state & QStyle.State_Selected) and index.data(Qt.UserRole):
