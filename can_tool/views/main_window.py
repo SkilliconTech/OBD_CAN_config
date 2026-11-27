@@ -92,7 +92,6 @@ from can_tool.resources.skillicon_logo_data import skillicon_logo_icon
 from can_tool.resources.trash_icon_data import trash_pixmap
 
 from can_tool.views.classic_can_dialog import ClassicCANSettingsDialog
-from can_tool.views.canfd_dialog import CANFDSettingsDialog
 from can_tool.views.log_config_widget import LogConfigWidget
 from can_tool.views.tree_delegate import ModernTreeDelegate
 from can_tool.app.controller import AppController
@@ -526,7 +525,7 @@ class ConfigurationTool(QMainWindow):
         
 
         self.classic_can_page = ClassicCANSettingsDialog(self)
-        self.canfd_page = CANFDSettingsDialog(self)
+
 
         self.content_stack.addWidget(self.log_pages)         # 0
         self.content_stack.addWidget(self.classic_can_page)  # 1
