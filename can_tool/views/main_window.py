@@ -1301,6 +1301,12 @@ class ConfigurationTool(QMainWindow):
     # ------------------------------------------------------------------
     # Theme
     # ------------------------------------------------------------------
+    def set_dark_mode(self, dark):
+        """Called by the app shell so the theme follows the Home page."""
+        if self.dark_mode != dark:
+            self.dark_mode = dark
+            self.apply_theme()
+            
     def toggle_theme(self):
 
         self.dark_mode = not self.dark_mode
