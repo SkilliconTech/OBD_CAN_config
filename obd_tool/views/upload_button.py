@@ -76,9 +76,14 @@ class UploadButton(QPushButton):
 
         # Rounded square — same as "?" (no circle)
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        # grey look while no logger is connected (idle and disabled)
+        greyed = self._state == "idle" and not self.isEnabled()
         border = self._border_hover if self.underMouse() and self.isEnabled() else self._border
+        bg = self._bg
+        if greyed:
+            border, bg = self._border_disabled, self._bg_disabled
         painter.setPen(QPen(QColor(border), 1.0))
-        painter.setBrush(QColor(self._bg))
+        painter.setBrush(QColor(bg))
         painter.drawRoundedRect(rect, RADIUS, RADIUS)
 
         color = QColor(_ICON.get(self._image_key(), _ICON["idle"]))
