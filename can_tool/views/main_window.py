@@ -824,38 +824,13 @@ class ConfigurationTool(QMainWindow):
         QTimer.singleShot(0, lambda: self._finish_new_file(item, name))
 
     def _finish_new_file(self, item, name):
-        def discard():
-            row = self.imported_list.row(item)
-            if row >= 0:
-                self.imported_list.takeItem(row)
-
-        if not name:                      # Esc or empty name
-            discard()
-            return
-
-        if any(ch in name for ch in '<>:"/\\|?*'):
-            QMessageBox.warning(
-                self, "Invalid name",
-                'A file name cannot contain any of these characters:\n'
-                '< > : " / \\ | ? *'
-            )
-            discard()
-            return
-
-        if not name.lower().endswith(".json"):
-            name += ".json"
-
-        # name already used by another row in the list?
-        for i in range(self.imported_list.count()):
-            other = self.imported_list.item(i)
-            if other is not item and \
-               other.text().lstrip("• ").strip().lower() == name.lower():
-                QMessageBox.warning(
-                    self, "Name already used",
-                    f"{name} is already in the list."
-                )
-                discard()
-                return
+        # Same rules as OBD Config: bad characters are removed, .json is added,
+        # an empty name becomes config.json, and a name that is already in the
+        # list becomes "name 2.json", "name 3.json", ...
+        taken = [self.imported_list.item(i).text().lstrip("• ").strip()
+                 for i in range(self.imported_list.count())
+                 if self.imported_list.item(i) is not item]
+        name = clean_file_name(name, taken)
 
         # Keep it as a draft: nothing is written to disk until Save
         item.setText("•  " + name)
@@ -867,7 +842,7 @@ class ConfigurationTool(QMainWindow):
         self.statusBar().showMessage(
             f"{name} created - click Save to choose where to store it", 6000
         )
-
+        
     def _discard_draft(self):
         item = self._draft_item
         self._draft_item = None
