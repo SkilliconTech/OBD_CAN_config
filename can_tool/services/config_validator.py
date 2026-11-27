@@ -100,17 +100,6 @@ def _rules_overlap(a, b):
         return bool({p[1] for p in pa} & {q[1] for q in pb})
     return any(_patterns_overlap(p, q) for p in pa for q in pb)
 
-
-def find_identifier_conflict(rules):
-    """Names of the first two enabled filters sharing an identifier, or None."""
-    active = [r for r in rules if r["enabled"]]
-    for i, a in enumerate(active):
-        for b in active[i + 1:]:
-            if _rules_overlap(a, b):
-                return a["filter_id"], b["filter_id"]
-    return None
-
-
 def find_conflict_with(rule, others):
     """Name of a filter in 'others' that shares an identifier, or None."""
     for b in others:
