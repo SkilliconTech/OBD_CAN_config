@@ -1,8 +1,8 @@
-"""Identifiers for modes that do not use PIDs: $05, $06, $08, $09."""
+"""Identifiers for modes that do not use PIDs: 05, 06, 08, 09."""
 from obd_tool.models.pid_directory.schema import Entry
 
 MODE_05 = (
-    Entry("$01-$0A", "Legacy oxygen sensor TIDs",
+    Entry("01-0A", "Legacy oxygen sensor TIDs",
           "Standardized TIDs covering voltage thresholds, switching times, "
           "voltage extrema, transition time, and sensor period."),
     Entry("Mfr.", "Manufacturer-specific TIDs",
@@ -11,15 +11,15 @@ MODE_05 = (
 
 MODE_06 = (
     Entry("OBDMID", "CAN OBDMIDs (standardized)",
-          "$01-$10, $21-$24, $31-$3D, $41-$50, $61-$64, $71-$74, $81-$86, "
-          "$90-$91, $98-$99, $A1-$B3."),
-    Entry("$E1-$FF", "CAN OBDMIDs (manufacturer-defined)",
-          "Manufacturer-defined OBDMIDs use $E1-$FF."),
-    Entry("$01-$0C", "CAN monitor TIDs (standardized)",
+          "01-10, 21-24, 31-3D, 41-50, 61-64, 71-74, 81-86, "
+          "90-91, 98-99, A1-B3."),
+    Entry("E1-FF", "CAN OBDMIDs (manufacturer-defined)",
+          "Manufacturer-defined OBDMIDs use E1-FF."),
+    Entry("01-0C", "CAN monitor TIDs (standardized)",
           "Appendix E defines unit and scaling IDs."),
-    Entry("$80-$FE", "CAN monitor TIDs (manufacturer-defined)",
-          "Manufacturer-defined TIDs use $80-$FE."),
-    Entry("Legacy", "Legacy Mode $06",
+    Entry("80-FE", "CAN monitor TIDs (manufacturer-defined)",
+          "Manufacturer-defined TIDs use 80-FE."),
+    Entry("Legacy", "Legacy Mode 06",
           "Uses ECU-defined TIDs and component IDs."),
 )
 
