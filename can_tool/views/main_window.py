@@ -11,6 +11,7 @@ from obd_tool.views.target_selector import TargetSelector
 from can_tool.services.config_validator import validate_complete_config
 
 CONFIG_FOLDER = getattr(_logger_rules, "CONFIG_FOLDER", "CONFIG")   # folder on the logger's SD card
+
 from PySide6.QtGui import (
     QFont,
     QIcon,
@@ -470,6 +471,20 @@ class ConfigurationTool(QMainWindow):
             hidden.setParent(self)
             hidden.hide()
 
+        # Device connection (same as OBD Config): Device list + Upload button
+        self.mtp_device = ""                     # logger chosen over USB
+        self.logger_drive = ""                   # card reader drive letter
+        self._last_synced = None
+        self._send_task = None
+        self._drive_timer = QTimer(self)         # only runs while a drive letter is chosen
+        self._drive_timer.setInterval(1500)
+        self._drive_timer.timeout.connect(self._sync_logger_drive)
+
+        self.target_selector = TargetSelector()
+        self.target_selector.drive_changed.connect(self.on_drive_changed)
+        self.target_selector.send_requested.connect(self.on_send_to_logger)
+        topbar.addWidget(self.target_selector)
+        topbar.addSpacing(10)
         # Home button: the only button at the right end of the toolbar
         self.home_button = HomeButton()
         self.home_button.clicked.connect(self.home_requested)
