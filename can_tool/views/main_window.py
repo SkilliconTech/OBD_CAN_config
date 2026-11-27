@@ -2,9 +2,15 @@ import os
 import json
 import copy
 
-from PySide6.QtCore import Qt, QSize, QUrl, QTimer,QFile,QEvent, QRect, Signal
+from PySide6.QtCore import Qt, QSize, QUrl, QTimer,QFile,QEvent, QRect, Signal, QThreadPool
 from home_button import HomeButton
+from obd_tool.models import config_rules as _logger_rules
+from obd_tool.services.mtp_device import MTP_PREFIX
+from obd_tool.views.mtp_tasks import MtpSendTask
+from obd_tool.views.target_selector import TargetSelector
+from can_tool.services.config_validator import validate_complete_config
 
+CONFIG_FOLDER = getattr(_logger_rules, "CONFIG_FOLDER", "CONFIG")   # folder on the logger's SD card
 from PySide6.QtGui import (
     QFont,
     QIcon,
