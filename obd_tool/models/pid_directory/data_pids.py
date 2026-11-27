@@ -1,11 +1,11 @@
-"""Appendix B data PIDs (Modes $01 and $02), from SAE J1979-DA October 2011.
-Support selectors ($00, $20, $40, ...) are left out on purpose: they are bitmaps,
+"""Appendix B data PIDs (Modes 01 and 02), from SAE J1979-DA October 2011.
+Support selectors (00, 20, 40, ...) are left out on purpose: they are bitmaps,
 not data values."""
 from obd_tool.models.pid_directory.schema import Entry
 
 _RAW = [
     ("01", "Monitor status since DTCs cleared", "Returns malfunction lamp status, the DTC count, and monitor support and readiness."),
-    ("02", "Freeze-frame trigger DTC", "Mode $02. Returns the trouble code that caused the snapshot to be stored."),
+    ("02", "Freeze-frame trigger DTC", "Mode 02. Returns the trouble code that caused the snapshot to be stored."),
     ("03", "Fuel system status", "Returns open-loop or closed-loop operating status for each reported fuel system."),
     ("04", "Calculated engine load", "Returns current calculated load as a percentage of maximum available torque."),
     ("05", "Engine coolant temperature", "Returns the coolant or cylinder-head-derived temperature."),
@@ -57,7 +57,7 @@ _RAW = [
     ("4D", "Engine run time with MIL on", "Returns accumulated engine running time with the malfunction lamp on."),
     ("4E", "Engine run time since DTCs cleared", "Returns accumulated engine running time since code clearing."),
     ("4F", "Test equipment configuration #1", "Returns scaling limits for equivalence ratio, oxygen sensor voltage/current, and manifold pressure."),
-    ("50", "Test equipment configuration #2", "Returns the scaling limit for mass air flow PID $10."),
+    ("50", "Test equipment configuration #2", "Returns the scaling limit for mass air flow PID 10."),
     ("51", "Fuel type", "Returns the type of fuel currently in use."),
     ("52", "Alcohol fuel percentage", "Returns the percentage of alcohol in the fuel."),
     ("53", "Absolute EVAP vapor pressure", "Returns evaporative system vapor pressure on an absolute scale."),
