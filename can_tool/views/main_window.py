@@ -61,11 +61,6 @@ from can_tool.models.constants import (
     LOG_PAGES
 )
 
-from can_tool.models.config_model import default_log_config
-
-from can_tool.services.config_validator import (
-    validate_log_config
-)
 from can_tool.services.config_version import CURRENT_CONFIG_VERSION
 
 from can_tool.services.config_repository import (
@@ -1018,8 +1013,6 @@ def _apply_config(self, data):
         self.classic_can_default_settings = dict(DEFAULT_CLASSIC_CAN)
         self.classic_can_default_all_settings = dict(DEFAULT_CLASSIC_CAN)
         self.classic_can_all_settings = dict(DEFAULT_CLASSIC_CAN)
-        self.controller.update_logging_config(default_log_config())
-        self.log_pages.apply(default_log_config())
 
         self.classic_can_page.load_from_parent()
         self.canfd_page.load_from_parent()
