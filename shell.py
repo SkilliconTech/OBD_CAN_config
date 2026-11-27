@@ -59,6 +59,7 @@ class AppShell(QMainWindow):
 
         self.obd_host = None
         self.can_host = None
+        self.dark_mode = False                              # (a) NEW
 
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
@@ -66,6 +67,7 @@ class AppShell(QMainWindow):
         self.home = HomePage()
         self.home.obd_requested.connect(self.open_obd)
         self.home.can_requested.connect(self.open_can)
+        self.home.theme_changed.connect(self.set_theme)     # (a) NEW
         self.stack.addWidget(self.home)
 
     # Each tool is created the first time its button is clicked, then kept
@@ -84,7 +86,15 @@ class AppShell(QMainWindow):
         self.setWindowTitle("CAN Config")
         self.stack.setCurrentWidget(self.can_host)
 
-    def _add_host(self, tool):
+    def set_theme(self, dark):                              # (b) NEW method
+        """Home toggle was clicked: pass the theme to every tool already open."""
+        self.dark_mode = dark
+        for host in (self.obd_host, self.can_host):
+            if host is not None:
+                host.tool.set_dark_mode(dark)
+
+    def _add_host(self, tool):                              # (c) REPLACED
+        tool.set_dark_mode(self.dark_mode)                  # match Home right away
         host = ToolHost(tool)
         host.tool.home_requested.connect(self.go_home)
         self.stack.addWidget(host)
