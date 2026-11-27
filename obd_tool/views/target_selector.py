@@ -124,11 +124,16 @@ class TargetSelector(QWidget):
         current = self.current_drive()
         is_usb = current.startswith(MTP_PREFIX)
         ready = self.storage_ready()
-        self.send_button.setVisible(is_usb)
+        self.send_button.setVisible(True)                   # always shown
+        # grey and not clickable until a logger is connected over USB
         self.send_button.setEnabled(is_usb and not self._sending)
-        self.send_button.setToolTip(
-            "Copy config.json to the SD card of the logger" if ready else
-            "The SD card is not available. The logger shows it only after logging stops.")
+        if not is_usb:
+            tip = "Connect the logger over USB to enable Upload"
+        elif ready:
+            tip = "Copy config.json to the SD card of the logger"      # <- keep your CONFIG wording here if you changed it
+        else:
+            tip = "The SD card is not available. The logger shows it only after logging stops."
+        self.send_button.setToolTip(tip)
 
     def apply_theme(self, c):
         self.setStyleSheet(f"""
