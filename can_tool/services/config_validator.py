@@ -136,14 +136,6 @@ CLASSIC_BITRATES = {
 }
 CLASSIC_SJW = ("1", "2", "3", "4")
 
-def validate_classic_can(settings):
-    require(isinstance(settings, dict),
-            "Classic CAN settings must be a JSON object.")
-    _check_pair(settings, "bitrate", "sampling_point",
-                CLASSIC_BITRATES, "Classic CAN")
-    _check_choice(settings, "sjw", CLASSIC_SJW, "Classic CAN SJW")
-    if "enabled" in settings:
-        check_bool(settings["enabled"], "Classic CAN enabled")
 
 
 def validate_complete_config(data):
