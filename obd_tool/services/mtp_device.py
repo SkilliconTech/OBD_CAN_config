@@ -5,7 +5,7 @@ An MTP device has no drive letter, so normal file writes cannot reach it. This m
 the Windows Shell (the same engine Explorer uses) through PowerShell, so it needs no extra
 Python package.
 
-Device:  This PC > OBD_<factory number> > SD card > CONFIG > config.json
+Device:  This PC > SkiDrive_<factory number> > SD card > CONFIG > config.json
 """
 import hashlib
 import os
@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from obd_tool.models import config_rules as R
 
 MTP_PREFIX = "mtp:"                 # marks an MTP choice in the logger dropdown
-DEVICE_PREFIX = "OBD_"              # the logger shows up as OBD_<factory number>
+DEVICE_PREFIX = "SkiDrive_"              # the logger shows up as SkiDrive_<factory number>
 STORAGE_NAME = "SD card"            # the storage inside the device
 CONFIG_NAME = "config.json"
 SCAN_TIMEOUT_S = 20
@@ -27,7 +27,7 @@ SUCCESS_TEXT = "Transfer complete\u2014restart the logger to apply."
 
 @dataclass
 class MtpDevice:
-    name: str                                        # e.g. "OBD_1757338"
+    name: str                                        # e.g. "SkiDrive_1757338"
     storages: list = field(default_factory=list)     # storage names the device shows now
 
     @property
@@ -51,7 +51,7 @@ _LIST_SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
 $shell = New-Object -ComObject Shell.Application
 foreach ($item in $shell.Namespace(17).Items()) {
-    if ($item.Name -like 'OBD_*') {
+    if ($item.Name -like 'SkiDrive_*') {
         $names = @()
         try {
             $folder = $item.GetFolder
@@ -159,7 +159,7 @@ def _parse_devices(output):
         parts = line.rstrip("\r").split("\t")
         if len(parts) < 2 or parts[0] != "DEVICE":
             continue
-        if not parts[1].upper().startswith(DEVICE_PREFIX):
+        if not parts[1].casefold().startswith(DEVICE_PREFIX.casefold()):
             continue
         storages = [s for s in (parts[2].split(";") if len(parts) > 2 else []) if s]
         devices.append(MtpDevice(parts[1], storages))
