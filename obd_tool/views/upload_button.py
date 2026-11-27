@@ -35,6 +35,8 @@ class UploadButton(QPushButton):
         self._bg = LIGHT["bg_panel"]        # ← same as ?
         self._border = LIGHT["border"]      # ← same as ?
         self._border_hover = LIGHT["accent_blue"]
+        self._bg_disabled = LIGHT["btn_bg"]            # grey look when no logger is connected
+        self._border_disabled = LIGHT["btn_border"]
         self.setFixedSize(QSize(BUTTON_SIZE, BUTTON_SIZE))
         self.setCursor(Qt.PointingHandCursor)
         self.setFlat(True)
