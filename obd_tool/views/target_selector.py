@@ -35,7 +35,7 @@ class TargetSelector(QWidget):
         self.drive_combo.currentIndexChanged.connect(self._on_drive_index)
 
         self.send_button = UploadButton()
-        self.send_button.setVisible(False)
+        self.send_button.setEnabled(False)     # grey until a USB logger is connected
         self.send_button.clicked.connect(lambda: self.send_requested.emit())
 
         lay.addWidget(QLabel("Device:"))
