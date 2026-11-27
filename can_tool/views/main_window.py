@@ -55,7 +55,6 @@ from PySide6.QtWidgets import (
 
 from can_tool.models.constants import (
     DEFAULT_CLASSIC_CAN,
-    DEFAULT_CANFD,
     PROJECT_EXT,
     PROJECT_FILTER,
     JSON_FILTER,
@@ -182,7 +181,6 @@ class ConfigurationTool(QMainWindow):
             self.classic_can_settings
         )
         self.classic_can_enabled = False
-        self.canfd_settings = dict(DEFAULT_CANFD)
         self.canfd_settings = self.controller.get_canfd()
 
         self.setWindowTitle("Configuration Tool")
@@ -1020,7 +1018,6 @@ def _apply_config(self, data):
         self.classic_can_default_settings = dict(DEFAULT_CLASSIC_CAN)
         self.classic_can_default_all_settings = dict(DEFAULT_CLASSIC_CAN)
         self.classic_can_all_settings = dict(DEFAULT_CLASSIC_CAN)
-        self.canfd_settings = dict(DEFAULT_CANFD)
         self.controller.update_logging_config(default_log_config())
         self.log_pages.apply(default_log_config())
 
@@ -1045,7 +1042,6 @@ def _apply_config(self, data):
         self.classic_can_default_settings = dict(DEFAULT_CLASSIC_CAN)
         self.classic_can_default_all_settings = dict(DEFAULT_CLASSIC_CAN)
         self.classic_can_all_settings = dict(DEFAULT_CLASSIC_CAN)
-        self.canfd_settings = dict(DEFAULT_CANFD)
         self.controller.update_logging_config(default_log_config())
         self.log_pages.apply(default_log_config())
 
