@@ -48,7 +48,9 @@ class UploadButton(QPushButton):
         self._bg = c["bg_panel"]
         self._border = c["border"]
         _ICON["idle"] = c["text_primary"]
-        _ICON["disabled"] = c["text_secondary"]
+        _ICON["disabled"] = "#9AA1AE"
+        self._bg_disabled = c["btn_bg"]
+        self._border_disabled = c["btn_border"]
         self._border_hover = c["accent_blue"]
         _ICON["idle"] = c["text_primary"]
         self.update()
