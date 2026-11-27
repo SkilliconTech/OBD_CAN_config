@@ -377,7 +377,7 @@ class ObdMainWindow(QMainWindow):
             else:
                 # no checkbox: description only
                 page = ModeInfoPage(code)
-            self.add_page(f"Mode ${code}", page)
+            self.add_page(f"Mode {code}", page)
         for page in self.pages.values():
             page.apply_theme(c)
         self.settings_page = SettingsPage()
@@ -392,7 +392,7 @@ class ObdMainWindow(QMainWindow):
         self._sync_config()
 
     def _show_mode_page(self, code):
-        name = f"Mode ${code}"
+        name = f"Mode {code}"
         page = self.pages.get(name)
         if page is None:
             return
@@ -404,13 +404,13 @@ class ObdMainWindow(QMainWindow):
     def _refresh_pages_enabled(self):
         """A mode's PIDs can be ticked only while the mode's own box is ticked."""
         for code in MODES:
-            page = self.pages.get(f"Mode ${code}")
+            page = self.pages.get(f"Mode {code}")
             if hasattr(page, "set_selection_enabled"):
                 page.set_selection_enabled(code in self.selected_modes)
 
     def on_mode_toggled(self, code, checked):
         """Box ticked or unticked: enable or disable that PID table, show the page."""
-        page = self.pages.get(f"Mode ${code}")
+        page = self.pages.get(f"Mode {code}")
         if hasattr(page, "set_selection_enabled"):
             page.set_selection_enabled(checked)
         self._show_mode_page(code)
@@ -539,7 +539,7 @@ class ObdMainWindow(QMainWindow):
             item.setExpanded(not item.isExpanded())
             return
 
-        # Mode $05 and $08 → do absolutely nothing
+        # Mode 05 and 08 → do absolutely nothing
         code = item.data(0, Qt.UserRole)
         if code in ("05", "08"):
             return
@@ -685,7 +685,7 @@ class ObdMainWindow(QMainWindow):
                 setattr(self, name, copy.deepcopy(state[name]))
         self.new_tree.set_checked_modes(self.selected_modes)
         for mode, chosen in self.selected_pids.items():
-            page = self.pages.get(f"Mode ${mode}")
+            page = self.pages.get(f"Mode {mode}")
             if page is not None:
                 page.set_selection(list(chosen), self.frame_02)
         self._refresh_pages_enabled()
@@ -834,7 +834,7 @@ class ObdMainWindow(QMainWindow):
         self.base_config = replace(config, requests=[])
         self.new_tree.set_checked_modes(selection.modes)
         for mode, chosen in selection.pids.items():
-            page = self.pages.get(f"Mode ${mode}")
+            page = self.pages.get(f"Mode {mode}")
             if page is not None:
                 page.set_selection(list(chosen), selection.frame)
         self.selected_modes = list(selection.modes)
