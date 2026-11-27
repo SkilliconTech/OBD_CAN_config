@@ -192,20 +192,6 @@ def validate_classic_can(settings):
     if "enabled" in settings:
         check_bool(settings["enabled"], "Classic CAN enabled")
 
-
-def validate_canfd(settings):
-    require(isinstance(settings, dict),
-            "CAN FD settings must be a JSON object.")
-    _check_pair(settings, "arbitration_bitrate", "arbitration_sp",
-                CANFD_ARBITRATION, "CAN FD arbitration")
-    _check_choice(settings, "arbitration_sjw", CANFD_SJW,
-                  "CAN FD arbitration SJW")
-    _check_pair(settings, "data_bitrate", "data_sp",
-                CANFD_DATA, "CAN FD data")
-    _check_choice(settings, "data_sjw", CANFD_SJW, "CAN FD data SJW")
-    if "enabled" in settings:
-        check_bool(settings["enabled"], "CAN FD enabled")
-
 def validate_can_mode(classic, canfd):
     """The logger has one CAN channel: only one mode may be enabled."""
     classic_on = isinstance(classic, dict) and classic.get("enabled") is True
