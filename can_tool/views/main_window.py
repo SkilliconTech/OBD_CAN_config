@@ -739,61 +739,30 @@ class ConfigurationTool(QMainWindow):
     # Configuration data (used by Save / Open / Import / Export)
     # ------------------------------------------------------------------
     
-    def _collect_config(self) -> dict:
+def _collect_config(self) -> dict:
+    rules = self.log_pages.collect()
+    self.controller.update_filters(rules)
+    s = self.classic_can_settings
+    return {
+        "version": CURRENT_CONFIG_VERSION,
+        "operating_mode": "can",
+        "bitrate": s["bitrate"],
+        "startup_delay_ms": s["startup_delay_ms"],
+        "run_duration_ms": s["run_duration_ms"],
+        "filters": {"classic_can": rules},
+    }
 
-        # Collect the current logging settings
-        log_data = self.log_pages.collect()
-
-        # Update the central logging model
-        self.controller.update_logging_config(
-            log_data
-        )
-
-        # Preserve the existing configuration file format
-        data = {
-            "app": "CAN Configuration Tool",
-            "version": CURRENT_CONFIG_VERSION,
-            "classic_can": dict(self.classic_can_settings),
-            "canfd": dict(self.canfd_settings),
-        }
-
-        data.update(log_data)
-
-        return data
-
-    
-    def _apply_config(self, data):
-        if not isinstance(data, dict) or not isinstance(
-            data.get("classic_can"), dict
-        ):
-            raise ValueError(
-                "This is not a valid configuration file."
-            )
-
-        log_data = default_log_config()
-
-        for key in ("filters", "triggers", "logging"):
-            if key in data:
-                log_data[key] = data[key]
-
-        validate_log_config(log_data)
-
-        classic = dict(DEFAULT_CLASSIC_CAN)
-        classic.update(data["classic_can"])
-
-        canfd = dict(DEFAULT_CANFD)
-
-        if isinstance(data.get("canfd"), dict):
-            canfd.update(data["canfd"])
-
-        self.controller.update_bus_settings(classic, canfd)
-
-        self.classic_can_enabled = bool(
-            classic.get("enabled", False)
-        )
-
-        self.log_pages.apply(log_data)
-        self.controller.update_logging_config(log_data)
+def _apply_config(self, data):
+    validate_complete_config(data)
+    self.classic_can_settings = {
+        **DEFAULT_CLASSIC_CAN,          # sampling point and SJW go back to defaults
+        "bitrate": data["bitrate"],
+        "startup_delay_ms": data["startup_delay_ms"],
+        "run_duration_ms": data["run_duration_ms"],
+    }
+    rules = data["filters"]["classic_can"]
+    self.log_pages.apply(rules)
+    self.controller.update_filters(rules)
     
     
     def _write_json(self, path: str, mark_clean: bool = True) -> bool:

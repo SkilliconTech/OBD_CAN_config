@@ -133,26 +133,48 @@ def validate_filters(rules):
         names.add(rule["filter_id"])
 
 
+CLASSIC_SJW = ("1", "2", "3", "4")
+
+CLASSIC_BITRATES = (100000, 125000, 250000, 500000, 1000000)
+CLASSIC_SJW = ("1", "2", "3", "4")
+
+
 def validate_classic_can(settings):
-    check_keys(settings, "bitrate startup_delay_ms run_duration_ms",
-               "Classic CAN")
+    require(isinstance(settings, dict), "Classic CAN settings must be an object")
     require(type(settings["bitrate"]) is int
             and settings["bitrate"] in CLASSIC_BITRATES,
             "Bitrate must be one of: "
             + ", ".join(str(b) for b in CLASSIC_BITRATES))
     check_int(settings["startup_delay_ms"], 0, 600000, "Startup delay")
     check_int(settings["run_duration_ms"], 0, 86400000, "Run duration")
+    if "sjw" in settings:
+        require(str(settings["sjw"]) in CLASSIC_SJW, "SJW must be 1, 2, 3 or 4")
+    if "sampling_point" in settings:
+        require(settings["sampling_point"] == "75%",
+                "Sampling point must be 75%")
+
+
+def validate_filters(rules):
+    require(isinstance(rules, list), "Filters must be a list")
+    names = set()
+    for rule in rules:
+        validate_rule(rule)
+        require(rule["filter_id"] not in names, "Duplicate filter name")
+        names.add(rule["filter_id"])
 
 
 def validate_complete_config(data):
     from can_tool.services.config_version import check_config_version
 
-    check_config_version(data)      # also checks that data is an object
-    check_keys(data, "version operating_mode bitrate startup_delay_ms "
-                     "run_duration_ms filters", "Configuration")
+    check_config_version(data)
+    required = {"version", "operating_mode", "bitrate", "startup_delay_ms",
+                "run_duration_ms", "filters"}
+    optional = {"sampling_point", "sjw"}          # only used in option B
+    require(isinstance(data, dict) and required <= set(data) <= required | optional,
+            "Configuration has missing or unknown fields")
     require(data["operating_mode"] == "can", 'operating_mode must be "can"')
-    validate_classic_can({k: data[k] for k in
-                          ("bitrate", "startup_delay_ms", "run_duration_ms")})
-    check_keys(data["filters"], "classic_can", "Filters")
+    validate_classic_can(data)
+    require(isinstance(data["filters"], dict) and set(data["filters"]) == {"classic_can"},
+            'filters must contain only "classic_can"')
     validate_filters(data["filters"]["classic_can"])
     return True
