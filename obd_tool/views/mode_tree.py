@@ -11,7 +11,7 @@ BLOCKED_MODES = {"05", "08"}
 
 class ModeTree(QTreeWidget):
     """List of modes.
-    Mode $05 and $08 are gray + show prohibition cursor + ignore clicks.
+    Mode 05 and 08 are gray + show prohibition cursor + ignore clicks.
     """
 
     modes_changed = Signal(list)
@@ -27,7 +27,7 @@ class ModeTree(QTreeWidget):
         self.clear()
         for code in modes:
             info = get_mode_info(code)
-            item = QTreeWidgetItem([f"Mode ${code}"])
+            item = QTreeWidgetItem([f"Mode {code}"])
             item.setData(0, Qt.UserRole, code)
             item.setData(0, Qt.UserRole + 1, code in BLOCKED_MODES)  # blocked flag
 
@@ -67,7 +67,7 @@ class ModeTree(QTreeWidget):
         self.viewport().update()
 
     def mouseMoveEvent(self, event):
-        """Show prohibition cursor when hovering over $05 / $08."""
+        """Show prohibition cursor when hovering over 05 / 08."""
         item = self.itemAt(event.position().toPoint())
         if item is not None and item.data(0, Qt.UserRole + 1):
             self.viewport().setCursor(QCursor(Qt.ForbiddenCursor))

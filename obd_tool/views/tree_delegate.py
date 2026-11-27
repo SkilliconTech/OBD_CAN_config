@@ -135,7 +135,7 @@ class ModernTreeDelegate(QStyledItemDelegate):
         )
         painter.setFont(font)
 
-        # Blocked modes ($05, $08) → dark gray only (no prohibition symbol)
+        # Blocked modes (05, 08) → dark gray only (no prohibition symbol)
         is_blocked = index.data(Qt.UserRole + 1)
         if is_blocked:
             painter.setPen(QColor("#6B7280"))          # dark gray
@@ -153,5 +153,5 @@ class ModernTreeDelegate(QStyledItemDelegate):
         painter.drawText(
             text_rect,
             Qt.AlignVCenter | Qt.AlignLeft,
-            str(index.data())                         # just "Mode $05" / "Mode $08"
+            str(index.data())                         # just "Mode 05" / "Mode 08"
         )
