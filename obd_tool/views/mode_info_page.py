@@ -15,7 +15,7 @@ class ModeInfoPage(QWidget):
         lay.setContentsMargins(20, 16, 20, 16)
         lay.setSpacing(10)
 
-        heading = QLabel(f"Mode ${mode}: {info.name}")
+        heading = QLabel(f"Mode {mode}: {info.name}")
         heading.setObjectName("infoHeading")
         lay.addWidget(heading)
 

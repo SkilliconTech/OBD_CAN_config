@@ -113,7 +113,7 @@ class PidPage(QWidget):
         lay.setContentsMargins(20, 16, 20, 16)
         lay.setSpacing(10)
 
-        heading = QLabel(f"Mode ${self.mode}: {self.info.name}")
+        heading = QLabel(f"Mode {self.mode}: {self.info.name}")
         heading.setObjectName("pidHeading")
         lay.addWidget(heading)
 
@@ -187,7 +187,7 @@ class PidPage(QWidget):
       self.table.setItemDelegateForColumn(0, self._check_delegate)
 
       for row, entry in enumerate(self.entries):
-        shown = f"${entry.ident}" if len(entry.ident) <= 2 else entry.ident
+        shown = f"{entry.ident}" if len(entry.ident) <= 2 else entry.ident
         id_item = QTableWidgetItem(shown)
         id_item.setData(_ID_ROLE, entry.ident)
         if selectable:
