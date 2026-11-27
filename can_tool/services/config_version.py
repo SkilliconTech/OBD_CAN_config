@@ -1,5 +1,5 @@
 CURRENT_CONFIG_VERSION = 2          # version written by the app
-SUPPORTED_CONFIG_VERSIONS = (1, 2)  # versions the app can read
+SUPPORTED_CONFIG_VERSIONS = (2,)  # versions the app can read
 
 
 def check_config_version(data):
