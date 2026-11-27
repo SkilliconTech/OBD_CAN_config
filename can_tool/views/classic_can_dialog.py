@@ -1,37 +1,32 @@
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QGroupBox,
-    QLabel,
-    QRadioButton,
-    QComboBox,
-    QScrollArea,
-    QFrame,
-    QPushButton
+    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QLabel,
+    QComboBox, QSpinBox, QScrollArea, QFrame, QPushButton,
 )
 from can_tool.resources.theme import RADIUS_SM
-from can_tool.views.check_radio import CheckRadioButton
-from PySide6.QtCore import Qt
+from can_tool.resources.spin_style import spinbox_stylesheet
 from can_tool.models.constants import DEFAULT_CLASSIC_CAN
+
+# (text shown, bitrate number, sampling point)
+BITRATE_CHOICES = (
+    ("100.000 kbits/s, 75%", 100000, "75%"),
+    ("125.000 kbits/s, 75%", 125000, "75%"),
+    ("250.000 kbits/s, 75%", 250000, "75%"),
+    ("500.000 kbits/s, 75%", 500000, "75%"),
+    ("1.000 Mbits/s, 75%", 1000000, "75%"),
+)
 
 
 class ClassicCANSettingsDialog(QWidget):
-    """Classic CAN settings shown in the right content panel (not a popup)."""
+    """Classic CAN settings shown in the right content panel."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-
         self.parent_window = parent
-
-        default_settings = dict(DEFAULT_CLASSIC_CAN)
-
-        if parent is not None:
-            self.settings = dict(
-                getattr(parent, "classic_can_settings", default_settings)
-            )
-        else:
-            self.settings = dict(default_settings)
+        self.settings = dict(
+            getattr(parent, "classic_can_settings", DEFAULT_CLASSIC_CAN)
+            if parent is not None else DEFAULT_CLASSIC_CAN
+        )
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -45,397 +40,188 @@ class ClassicCANSettingsDialog(QWidget):
 
         body = QWidget()
         scroll.setWidget(body)
-
         main_layout = QVBoxLayout(body)
         main_layout.setContentsMargins(4, 4, 4, 4)
         main_layout.setSpacing(8)
 
-        # Bus parameters
+        # ---- Bus parameters: bitrate + sampling point, SJW ----
         bus_group = QGroupBox("Bus parameters")
-        bus_layout = QVBoxLayout(bus_group)
-        bus_layout.setSpacing(6)
-
-        bitrate_layout = QHBoxLayout()
-        bitrate_label = QLabel("Bitrate and\nsampling point:")
+        bus_form = QFormLayout(bus_group)
 
         self.bitrate_combo = QComboBox()
-        self.bitrate_combo.addItems([
-            "100.000 kbits/s, 75%",
-            "125.000 kbits/s, 75%",
-            "250.000 kbits/s, 75%",
-            "500.000 kbits/s, 75%",
-            "1.000 Mbits/s, 75%",
-        ])
-        self.bitrate_combo.setCurrentText("500.000 kbits/s, 75%")
-
-        bitrate_layout.addWidget(bitrate_label)
-        bitrate_layout.addWidget(self.bitrate_combo, 1)
-        bus_layout.addLayout(bitrate_layout)
-
-        sjw_layout = QHBoxLayout()
-        sjw_label = QLabel("SJW:")
+        for text, rate, sp in BITRATE_CHOICES:
+            self.bitrate_combo.addItem(text, (rate, sp))
+        bus_form.addRow("Bitrate and\nsampling point:", self.bitrate_combo)
 
         self.sjw_combo = QComboBox()
         self.sjw_combo.addItems(["1", "2", "3", "4"])
-
-        sjw_layout.addWidget(sjw_label)
-        sjw_layout.addWidget(self.sjw_combo)
-        sjw_layout.addStretch(1)
-
-        bus_layout.addLayout(sjw_layout)
+        bus_form.addRow("SJW:", self.sjw_combo)
 
         main_layout.addWidget(bus_group)
-        timing_note = QLabel(
-            "When both CAN modes are enabled, CAN FD arbitration "
-            "settings supply the shared bitrate, sample point "
-            "and SJW. Change shared timing on the CAN FD page."
-        )
 
-        timing_note.setWordWrap(True)
-        main_layout.addWidget(timing_note)
+        # ---- Run settings ----
+        run_group = QGroupBox("Run settings")
+        run_form = QFormLayout(run_group)
+        self.startup_delay = self._spin(0, 600000, 100)
+        self.run_duration = self._spin(0, 86400000, 1000)
+        self.run_duration.setSpecialValueText("0 (run continuously)")
+        run_form.addRow("Startup delay:", self.startup_delay)
+        run_form.addRow("Run duration:", self.run_duration)
+        main_layout.addWidget(run_group)
 
-        # Current settings
+        # ---- Current settings ----
         current_group = QGroupBox("Current settings")
         current_layout = QVBoxLayout(current_group)
-
         self.current_bitrate = QLabel()
         self.current_sampling = QLabel()
         self.current_sjw = QLabel()
-
-        current_layout.addWidget(self.current_bitrate)
-        current_layout.addWidget(self.current_sampling)
-        current_layout.addWidget(self.current_sjw)
-
+        self.current_startup = QLabel()
+        self.current_duration = QLabel()
+        for label in (self.current_bitrate, self.current_sampling,
+                      self.current_sjw, self.current_startup,
+                      self.current_duration):
+            current_layout.addWidget(label)
         main_layout.addWidget(current_group)
 
-        # Options and Store settings
-        bottom_layout = QHBoxLayout()
-        bottom_layout.setSpacing(12)
-
-        options_group = QGroupBox("Options")
-        options_layout = QVBoxLayout(options_group)
-
-        self.enable_radio = CheckRadioButton("Enable")
-        self.disable_radio = CheckRadioButton("Disable")
-
-        if self.settings.get("enabled", False):
-            self.enable_radio.setChecked(True)
-        else:
-            self.disable_radio.setChecked(True)
-
-        options_layout.addWidget(self.enable_radio)
-        options_layout.addWidget(self.disable_radio)
-        options_layout.addStretch(1)
-
-        bottom_layout.addWidget(options_group)
-
-        store_group = QGroupBox("Store settings")
-        store_layout = QVBoxLayout(store_group)
-        store_layout.setSpacing(6)
-
-        apply_all_layout = QHBoxLayout()
-        apply_all_button = QPushButton("Apply to all")
-        apply_all_description = QLabel(
-            "Apply current settings to all other channels"
-        )
-
-        apply_all_layout.addWidget(apply_all_button)
-        apply_all_layout.addWidget(apply_all_description)
-        store_layout.addLayout(apply_all_layout)
-
-        default_this_layout = QHBoxLayout()
-        default_this_button = QPushButton("Set default for this")
-        default_this_description = QLabel(
-            "Store current settings as default for this channel"
-        )
-
-        default_this_layout.addWidget(default_this_button)
-        default_this_layout.addWidget(default_this_description)
-        store_layout.addLayout(default_this_layout)
-
-        default_all_layout = QHBoxLayout()
-        default_all_button = QPushButton("Set default for all")
-        default_all_description = QLabel(
-            "Store current settings as default for all channels"
-        )
-
-        default_all_layout.addWidget(default_all_button)
-        default_all_layout.addWidget(default_all_description)
-        store_layout.addLayout(default_all_layout)
-
-        bottom_layout.addWidget(store_group, 1)
-
-        main_layout.addLayout(bottom_layout)
-
         main_layout.addStretch(1)
-        # Apply / Save / Cancel
+
+        # ---- Apply / Save / Cancel ----
         action_row = QHBoxLayout()
         action_row.addStretch(1)
-
         self.apply_button = QPushButton("Apply")
         self.save_button = QPushButton("Save")
         self.cancel_button = QPushButton("Cancel")
-
         self.apply_button.setToolTip("Use these settings in the app (does not write the file)")
         self.save_button.setToolTip("Save the changes of this window into the current file")
-
         self.apply_button.clicked.connect(self.on_apply)
         self.save_button.clicked.connect(self.on_save)
         self.cancel_button.clicked.connect(self.on_cancel)
-
-        action_row.addWidget(self.apply_button)
-        action_row.addWidget(self.save_button)
-        action_row.addWidget(self.cancel_button)
+        for b in (self.apply_button, self.save_button, self.cancel_button):
+            action_row.addWidget(b)
         main_layout.addLayout(action_row)
 
-        # Functional connections
-        self.bitrate_combo.currentTextChanged.connect(self.update_current_settings)
-        self.sjw_combo.currentTextChanged.connect(self.update_current_settings)
-        self.enable_radio.toggled.connect(self.update_current_settings)
-        apply_all_button.clicked.connect(
-            self.apply_to_all
-        )
-        default_this_button.clicked.connect(
-            self.set_default_for_this
-        )
-        default_all_button.clicked.connect(
-            self.set_default_for_all
-        )
+        self.bitrate_combo.currentIndexChanged.connect(self.update_current_settings)
+        self.sjw_combo.currentIndexChanged.connect(self.update_current_settings)
+        self.startup_delay.valueChanged.connect(self.update_current_settings)
+        self.run_duration.valueChanged.connect(self.update_current_settings)
 
-        # Restore the previously stored values.
         self._restore_settings()
         self.update_current_settings()
 
+    @staticmethod
+    def _spin(low, high, step):
+        box = QSpinBox()
+        box.setRange(low, high)
+        box.setSingleStep(step)
+        box.setSuffix(" ms")
+        box.setFixedWidth(220)
+        return box
+
     def _restore_settings(self):
-        target = (
-            f"{self.settings.get('bitrate', '500.000 kbits/s')}, "
-            f"{self.settings.get('sampling_point', '75%')}"
-        )
-
-        index = self.bitrate_combo.findText(target)
-
+        s = self.settings
+        rate = s.get("bitrate", 500000)
+        index = 0
+        for i in range(self.bitrate_combo.count()):
+            if self.bitrate_combo.itemData(i)[0] == rate:
+                index = i
+                break
         self.bitrate_combo.setCurrentIndex(index)
 
-        sjw = str(self.settings.get("sjw", "1"))
-        sjw_index = self.sjw_combo.findText(sjw)
+        sjw_index = self.sjw_combo.findText(str(s.get("sjw", "1")))
+        self.sjw_combo.setCurrentIndex(max(0, sjw_index))
 
-        self.sjw_combo.setCurrentIndex(sjw_index)
+        self.startup_delay.setValue(s.get("startup_delay_ms", 0))
+        self.run_duration.setValue(s.get("run_duration_ms", 0))
+
     def _collect_settings(self):
-        selected = self.bitrate_combo.currentText()
-
-        if "," in selected:
-            bitrate, sampling_point = selected.split(",", 1)
-            bitrate = bitrate.strip()
-            sampling_point = sampling_point.strip()
-        else:
-            bitrate = selected.strip()
-            sampling_point = ""
-
+        rate, sp = self.bitrate_combo.currentData()
         return {
-            "bitrate": bitrate,
-            "sampling_point": sampling_point,
+            "bitrate": rate,
+            "sampling_point": sp,
             "sjw": self.sjw_combo.currentText(),
-            "enabled": self.enable_radio.isChecked(),
+            "startup_delay_ms": self.startup_delay.value(),
+            "run_duration_ms": self.run_duration.value(),
         }
 
     def update_current_settings(self):
-        settings = self._collect_settings()
-
-        self.current_bitrate.setText(
-            f"Bitrate:                 {settings['bitrate']}"
-        )
-
-        self.current_sampling.setText(
-            f"Sampling point:     {settings['sampling_point']}"
-        )
-
-        self.current_sjw.setText(
-            f"SJW:                       {settings['sjw']}"
-        )
-
-    def apply_to_all(self):
-        settings = self._collect_settings()
-
-        if self.parent_window is not None:
-            self.parent_window.classic_can_settings = dict(settings)
-            self.parent_window.classic_can_all_settings = dict(settings)
-
-    def set_default_for_this(self):
-        settings = self._collect_settings()
-
-        if self.parent_window is not None:
-            self.parent_window.classic_can_default_settings = dict(settings)
-
-    def set_default_for_all(self):
-        settings = self._collect_settings()
-
-        if self.parent_window is not None:
-            self.parent_window.classic_can_default_all_settings = dict(
-                settings
-            )
-
-    def on_apply(self):
-        """Apply: update the app only (no file write)."""
-        self.apply_to_parent()
-        if self.parent_window is not None:
-            self.parent_window.statusBar().showMessage(
-                "Classic CAN settings applied", 3000
-            )
-
-    def on_save(self):
-        """Save: keep the changes made in this window (no file, no path)."""
-        self.apply_to_parent()
-        self._saved_settings = dict(self._collect_settings())
-        if self.parent_window is not None:
-            self.parent_window.statusBar().showMessage(
-                "Classic CAN changes saved", 3000
-            )
-            
-    def on_cancel(self):
-        """Cancel: go back to the last saved settings of this window."""
-        saved = getattr(self, "_saved_settings", None)
-        if self.parent_window is not None and saved is not None:
-            self.parent_window.classic_can_settings = dict(saved)
-            self.parent_window.classic_can_enabled = saved.get("enabled", False)
-        self.load_from_parent()
-        if self.parent_window is not None:
-            self.parent_window.statusBar().showMessage(
-                "Classic CAN changes cancelled", 3000
-            )
+        s = self._collect_settings()
+        self.current_bitrate.setText(f"Bitrate:  {s['bitrate'] // 1000} kbit/s")
+        self.current_sampling.setText(f"Sampling point:  {s['sampling_point']}")
+        self.current_sjw.setText(f"SJW:  {s['sjw']}")
+        self.current_startup.setText(f"Startup delay:  {s['startup_delay_ms']} ms")
+        self.current_duration.setText(
+            "Run duration:  continuous" if s["run_duration_ms"] == 0
+            else f"Run duration:  {s['run_duration_ms']} ms")
 
     def has_pending_changes(self):
-        """True if the form was edited but not applied/saved yet."""
         baseline = getattr(self, "_form_baseline", None)
         return baseline is not None and self._collect_settings() != baseline
-    
+
     def apply_to_parent(self):
-        settings = self._collect_settings()
-
         if self.parent_window is not None:
-            self.parent_window.classic_can_settings = dict(
-                settings
-            )
-
-            self.parent_window.classic_can_enabled = (
-                settings["enabled"]
-            )
-
+            self.parent_window.classic_can_settings = self._collect_settings()
             self.load_from_parent()
 
     def load_from_parent(self):
         if self.parent_window is None:
             return
         self.settings = dict(
-            getattr(self.parent_window, "classic_can_settings", DEFAULT_CLASSIC_CAN)
-        )
+            getattr(self.parent_window, "classic_can_settings", DEFAULT_CLASSIC_CAN))
         self._restore_settings()
-        if self.settings.get("enabled", False):
-            self.enable_radio.setChecked(True)
-        else:
-            self.disable_radio.setChecked(True)
         self.update_current_settings()
-
-        # remember the last saved state of this window (Cancel goes back to it)
         self._saved_settings = dict(self.settings)
-        # remember how the form looks now (used to detect unsaved edits)
         self._form_baseline = dict(self._collect_settings())
 
+    def on_apply(self):
+        self.apply_to_parent()
+        if self.parent_window is not None:
+            self.parent_window.statusBar().showMessage("Classic CAN settings applied", 3000)
+
+    def on_save(self):
+        self.apply_to_parent()
+        self._saved_settings = dict(self._collect_settings())
+        if self.parent_window is not None:
+            self.parent_window.statusBar().showMessage("Classic CAN changes saved", 3000)
+
+    def on_cancel(self):
+        saved = getattr(self, "_saved_settings", None)
+        if self.parent_window is not None and saved is not None:
+            self.parent_window.classic_can_settings = dict(saved)
+        self.load_from_parent()
+        if self.parent_window is not None:
+            self.parent_window.statusBar().showMessage("Classic CAN changes cancelled", 3000)
+
     def set_theme(self, c):
-        """Match light/dark colors used by Log Configuration."""
         self.setStyleSheet(f"""
-            QWidget {{
-                background-color: transparent;
-                color: {c['text_primary']};
-            }}
-            QLabel {{
-                color: {c['text_primary']};
-                background: transparent;
-            }}
-            QRadioButton {{
-                color: {c['text_primary']};
-                background: transparent;
-                spacing: 10px;
-                padding: 4px 0;
-            }}
-            QRadioButton::indicator {{
-                width: 18px;
-                height: 18px;
-                border-radius: 10px;
-                border: 2px solid {c['border']};
-                background-color: {c['bg_main']};
-            }}
-            QRadioButton::indicator:hover {{
-                border: 2px solid {c['accent_blue']};
-                background-color: {c['bg_main']};
-            }}
-            QRadioButton::indicator:checked {{
-                border: 2px solid {c['accent_blue']};
-                background-color: qradialgradient(
-                    cx: 0.5, cy: 0.5, radius: 0.5,
-                    fx: 0.5, fy: 0.5,
-                    stop: 0 {c['accent_blue']},
-                    stop: 0.40 {c['accent_blue']},
-                    stop: 0.50 transparent,
-                    stop: 1 transparent
-                );
-            }}
-            QRadioButton::indicator:checked:hover {{
-                border: 2px solid {c['accent_blue']};
-                background-color: qradialgradient(
-                    cx: 0.5, cy: 0.5, radius: 0.5,
-                    fx: 0.5, fy: 0.5,
-                    stop: 0 {c['accent_blue']},
-                    stop: 0.40 {c['accent_blue']},
-                    stop: 0.50 transparent,
-                    stop: 1 transparent
-                );
-            }}
+            QWidget {{ background-color: transparent; color: {c['text_primary']}; }}
+            QLabel {{ color: {c['text_primary']}; background: transparent; }}
             QGroupBox {{
                 color: {c['text_primary']};
                 border: 1px solid {c['border']};
                 border-radius: {RADIUS_SM}px;
-                margin-top: 10px;
-                padding-top: 8px;
+                margin-top: 10px; padding-top: 8px;
                 background-color: {c['bg_panel']};
             }}
             QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 4px;
+                subcontrol-origin: margin; left: 10px; padding: 0 4px;
                 color: {c['text_primary']};
             }}
             QComboBox {{
-                background-color: {c['bg_main']};
-                color: {c['text_primary']};
+                background-color: {c['bg_main']}; color: {c['text_primary']};
                 border: 1px solid {c['border']};
-                border-radius: {RADIUS_SM}px;
-                padding: 4px 6px;
+                border-radius: {RADIUS_SM}px; padding: 4px 6px;
             }}
             QComboBox QAbstractItemView {{
-                background-color: {c['bg_panel']};
-                color: {c['text_primary']};
+                background-color: {c['bg_panel']}; color: {c['text_primary']};
                 selection-background-color: {c['accent_blue']};
                 selection-color: #FFFFFF;
             }}
             QPushButton {{
-                background-color: {c['bg_panel']};
-                color: {c['text_primary']};
+                background-color: {c['bg_panel']}; color: {c['text_primary']};
                 border: 1px solid {c['border']};
-                border-radius: {RADIUS_SM}px;
-                padding: 6px 16px;
+                border-radius: {RADIUS_SM}px; padding: 6px 16px;
             }}
-            QPushButton:hover {{
-                border: 1px solid {c['accent_blue']};
-            }}
-            QScrollArea {{
-                background: transparent;
-                border: none;
-            }}
-            QScrollArea > QWidget > QWidget {{
-                background: transparent;
-            }}
-        """)
-        self.enable_radio.set_colors(c)
-        self.disable_radio.set_colors(c)
-
-    
+            QPushButton:hover {{ border: 1px solid {c['accent_blue']}; }}
+            QScrollArea {{ background: transparent; border: none; }}
+            QScrollArea > QWidget > QWidget {{ background: transparent; }}
+        """ + spinbox_stylesheet(c))

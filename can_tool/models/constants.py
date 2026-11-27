@@ -1,11 +1,11 @@
 # Default Classic CAN settings
 DEFAULT_CLASSIC_CAN = {
-    "bitrate": "500.000 kbits/s",
+    "bitrate": 500000,
     "sampling_point": "75%",
     "sjw": "1",
-    "enabled": False,
+    "startup_delay_ms": 0,
+    "run_duration_ms": 0,
 }
-
 
 # Configuration file extensions
 PROJECT_EXT = ".ccfg"
