@@ -799,7 +799,9 @@ class ConfigurationTool(QMainWindow):
             self.imported_list.editItem(self._pending_new_item)
             return
 
-        item = QListWidgetItem("")
+        taken = [self.imported_list.item(i).text().lstrip("• ").strip()
+                 for i in range(self.imported_list.count())]
+        item = QListWidgetItem(clean_file_name("config", taken))     # config.json
         item.setFlags(item.flags() | Qt.ItemIsEditable)
         self.imported_list.addItem(item)
         self.imported_list.setCurrentItem(item)
@@ -808,7 +810,10 @@ class ConfigurationTool(QMainWindow):
         self._pending_new_item = item
         self.imported_list.setFocus()
         self.imported_list.editItem(item)
-
+        editor = self.imported_list.focusWidget()              # the name box that just opened
+        if editor is not None and hasattr(editor, "selectAll"):
+            editor.selectAll()                                 # typing replaces config.json
+            
     def _on_new_file_editor_closed(self, editor, hint):
         item = self._pending_new_item
         if item is None:
