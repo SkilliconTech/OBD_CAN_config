@@ -112,11 +112,9 @@ def find_identifier_conflict(rules):
 
 
 def find_conflict_with(rule, others):
-    """Name of an enabled filter in 'others' that shares an identifier."""
-    if not rule["enabled"]:
-        return None
+    """Name of a filter in 'others' that shares an identifier, or None."""
     for b in others:
-        if b["enabled"] and _rules_overlap(rule, b):
+        if _rules_overlap(rule, b):
             return b["filter_id"]
     return None
 
