@@ -149,21 +149,9 @@ class ConfigurationTool(QMainWindow):
         self.current_file_path = None      # file used by Save / Ctrl+S
         # Classic CAN runtime configuration/state
         self.classic_can_settings = dict(DEFAULT_CLASSIC_CAN)
-        
-        self.classic_can_default_settings = dict(
-            self.classic_can_settings
-        )
-        self.classic_can_default_all_settings = dict(
-            self.classic_can_settings
-        )
-        self.classic_can_all_settings = dict(
-            self.classic_can_settings
-        )
-        self.classic_can_enabled = False
 
         self.setWindowTitle("Configuration Tool")
         self.resize(1400, 950)
-        print(self.screen().availableGeometry())
 
         # ------------------------------------------------------------------
         # Toolbar (New / Save / Import)
@@ -327,7 +315,7 @@ class ConfigurationTool(QMainWindow):
         sidebar_layout.addSpacing(12)
 
         # ================================================================
-        # SECTION 2: Bus / Log Configuration  (own frame + own layout)
+        # SECTION 2: Classic CAN / Filters  (own frame + own layout)
         # ================================================================
         self.config_section = QFrame()
         self.config_section.setObjectName("configSection")
@@ -393,7 +381,7 @@ class ConfigurationTool(QMainWindow):
 
         topbar = QHBoxLayout()
 
-        # The heading and the two switches live in one group,
+        # The heading and the Filters switch live in one group,
         # so they always stay side by side.
         title_group = QWidget()
         title_row = QHBoxLayout(title_group)
@@ -407,20 +395,14 @@ class ConfigurationTool(QMainWindow):
         )
         title_row.addWidget(self.title_label, 0, Qt.AlignVCenter)
 
-        # Editing switches: shown next to the heading on Filters and Triggers
+        # Editing switch: shown next to the heading on Filters
         self.filters_switch = SlideSwitch()
-        self.triggers_switch = SlideSwitch()
         self.filters_switch.setToolTip("Switch on to add or change filters")
-        self.triggers_switch.setToolTip("Switch on to change triggers")
         self.filters_switch.toggled.connect(
             lambda on: self._on_lock_toggled("filters", on)
         )
-        self.triggers_switch.toggled.connect(
-            lambda on: self._on_lock_toggled("triggers", on)
-        )
         title_row.addWidget(self.filters_switch, 0, Qt.AlignVCenter)
-        title_row.addWidget(self.triggers_switch, 0, Qt.AlignVCenter)
-        for widget in (self.filters_switch, self.triggers_switch):
+        for widget in (self.filters_switch,):
             widget.setVisible(False)
 
         topbar.addWidget(title_group)
@@ -496,7 +478,7 @@ class ConfigurationTool(QMainWindow):
             show_status=lambda msg: self.statusBar().showMessage(msg, 8000),
         )
         self.log_pages.configuration_changed.connect(
-           self.sync_logging_to_model
+           self.sync_filters_to_model
         )
         
 
@@ -505,7 +487,6 @@ class ConfigurationTool(QMainWindow):
 
         self.content_stack.addWidget(self.log_pages)         # 0
         self.content_stack.addWidget(self.classic_can_page)  # 1
-        self.content_stack.addWidget(self.canfd_page)        # 2
 
         content_layout.addWidget(self.content_stack)
         shadow = QGraphicsDropShadowEffect(
@@ -634,63 +615,6 @@ class ConfigurationTool(QMainWindow):
     # ------------------------------------------------------------------
     # Active CAN mode (single-channel logger: only one mode at a time)
     # ------------------------------------------------------------------
-    def _turn_off_other_mode(self, other):
-        """Switch off 'other' ('classic' or 'canfd') if it is enabled."""
-        if other == "canfd":
-            settings = dict(self.controller.get_canfd())
-            page = getattr(self, "canfd_page", None)
-            update = self.controller.update_canfd
-            off_name, on_name = "CAN FD", "Classic CAN"
-        else:
-            settings = dict(self.controller.get_classic_can())
-            page = getattr(self, "classic_can_page", None)
-            update = self.controller.update_classic_can
-            off_name, on_name = "Classic CAN", "CAN FD"
-
-        if not settings.get("enabled"):
-            return
-
-        settings["enabled"] = False
-        update(settings)
-        if other == "classic":
-            self.classic_can_enabled = False
-        if page is not None:
-            page.disable_radio.setChecked(True)
-
-        self.statusBar().showMessage(
-            f"{off_name} turned off - {on_name} is now the active mode", 5000
-        )
-
-    def _active_mode_name(self):
-        classic = bool(self.controller.get_classic_can().get("enabled"))
-        fd = bool(self.controller.get_canfd().get("enabled"))
-        if classic and fd:
-            return "Conflict"
-        if classic:
-            return "Classic CAN"
-        if fd:
-            return "CAN FD"
-        return "None"
-
-    def _refresh_mode_display(self):
-        """Show '(enabled)' next to each CAN mode that is switched on."""
-        classic_on = bool(self.controller.get_classic_can().get("enabled"))
-        fd_on = bool(self.controller.get_canfd().get("enabled"))
-
-        items = getattr(self, "_bus_mode_items", None)
-        if items:
-            try:
-                items[0].setText(
-                    0, "Classic CAN  (enabled)" if classic_on
-                    else "Classic CAN")
-                items[1].setText(
-                    0, "CAN FD  (enabled)" if fd_on
-                    else "CAN FD")
-            except RuntimeError:          # tree items were just rebuilt
-                pass
-    # ------------------------------------------------------------------
-    # Window title
-    # ------------------------------------------------------------------
     def _update_title(self):
         name = (
             f" - {os.path.basename(self.current_file_path)}"
@@ -698,48 +622,36 @@ class ConfigurationTool(QMainWindow):
         )
         self.setWindowTitle(f"Configuration Tool{name}")
 
-    def sync_logging_to_model(self):
+    def sync_filters_to_model(self):
         try:
-            settings = self.log_pages.collect()
-
-            self.controller.update_logging_config(
-                settings
-            )
-
+            self.controller.update_filters(self.log_pages.collect())
         except ValueError:
-            # Allow users to edit temporarily incomplete values.
-            # Validation will run again when saving.
             pass
-    # ------------------------------------------------------------------
-    # Configuration data (used by Save / Open / Import / Export)
-    # ------------------------------------------------------------------
-    
-def _collect_config(self) -> dict:
-    rules = self.log_pages.collect()
-    self.controller.update_filters(rules)
-    s = self.classic_can_settings
-    return {
-        "version": CURRENT_CONFIG_VERSION,
-        "operating_mode": "can",
-        "bitrate": s["bitrate"],
-        "startup_delay_ms": s["startup_delay_ms"],
-        "run_duration_ms": s["run_duration_ms"],
-        "filters": {"classic_can": rules},
-    }
 
-def _apply_config(self, data):
-    validate_complete_config(data)
-    self.classic_can_settings = {
-        **DEFAULT_CLASSIC_CAN,          # sampling point and SJW go back to defaults
-        "bitrate": data["bitrate"],
-        "startup_delay_ms": data["startup_delay_ms"],
-        "run_duration_ms": data["run_duration_ms"],
-    }
-    rules = data["filters"]["classic_can"]
-    self.log_pages.apply(rules)
-    self.controller.update_filters(rules)
-    
-    
+    def _collect_config(self) -> dict:
+        rules = self.log_pages.collect()
+        self.controller.update_filters(rules)
+        s = self.classic_can_settings
+        return {
+            "version": CURRENT_CONFIG_VERSION,
+            "operating_mode": "can",
+            "bitrate": s["bitrate"],
+            "startup_delay_ms": s["startup_delay_ms"],
+            "run_duration_ms": s["run_duration_ms"],
+            "filters": {"classic_can": rules},
+        }
+
+    def _apply_config(self, data):
+        validate_complete_config(data)
+        self.classic_can_settings = {
+            "bitrate": data["bitrate"],
+            "startup_delay_ms": data["startup_delay_ms"],
+            "run_duration_ms": data["run_duration_ms"],
+        }
+        rules = data["filters"]["classic_can"]
+        self.log_pages.apply(rules)
+        self.controller.update_filters(rules)
+
     def _write_json(self, path: str, mark_clean: bool = True) -> bool:
 
       try:
@@ -986,19 +898,16 @@ def _apply_config(self, data):
         """Empty the right-hand side (no page open)."""
         self._current_page = None
         self.title_label.setText("Configuration Tool")
-        self._show_lock_switch(None)          # hide Filters/Triggers switches
+        self._show_lock_switch(None)          # hide the Filters switch
         self.content_stack.setVisible(False)  # hide all pages
 
     def _reset_to_defaults(self):
         """Defaults in every window, and an empty page area."""
         self.classic_can_settings = dict(DEFAULT_CLASSIC_CAN)
-        self.classic_can_enabled = False
-        self.classic_can_default_settings = dict(DEFAULT_CLASSIC_CAN)
-        self.classic_can_default_all_settings = dict(DEFAULT_CLASSIC_CAN)
-        self.classic_can_all_settings = dict(DEFAULT_CLASSIC_CAN)
+        self.controller.update_filters([])
+        self.log_pages.apply([])
 
         self.classic_can_page.load_from_parent()
-        self.canfd_page.load_from_parent()
 
         self.current_file_path = None
         self._update_title()
@@ -1014,15 +923,10 @@ def _apply_config(self, data):
         self._discard_draft()
 
         self.classic_can_settings = dict(DEFAULT_CLASSIC_CAN)
-        self.classic_can_enabled = False
-        self.classic_can_default_settings = dict(DEFAULT_CLASSIC_CAN)
-        self.classic_can_default_all_settings = dict(DEFAULT_CLASSIC_CAN)
-        self.classic_can_all_settings = dict(DEFAULT_CLASSIC_CAN)
-        self.controller.update_logging_config(default_log_config())
-        self.log_pages.apply(default_log_config())
+        self.controller.update_filters([])
+        self.log_pages.apply([])
 
         self.classic_can_page.load_from_parent()
-        self.canfd_page.load_from_parent()
 
         self.current_file_path = None
         self._update_title()
@@ -1051,54 +955,6 @@ def _apply_config(self, data):
             self._update_title()
             self._show_device_tree()
             self.statusBar().showMessage(f"Opened: {path}", 3000)
-
-    def save_section(self, key, title):
-        """Save only one section (Classic CAN or CAN FD) into the current file.
-        The rest of the file stays exactly as it is on disk."""
-        path = self.current_file_path
-        if path is None:
-            # no file yet: do a normal full save (it asks for the path)
-            self.on_save()
-            return
-
-        try:
-            data = self.controller.load_configuration(path)
-        except (OSError, ValueError) as error:
-            QMessageBox.warning(
-                self, "Cannot update file",
-                f"The file could not be read:\n{error}\n\n"
-                "Use Save in the sidebar to write the whole configuration."
-            )
-            return
-
-        other = "canfd" if key == "classic_can" else "classic_can"
-        section = dict(
-            self.classic_can_settings if key == "classic_can"
-            else self.canfd_settings
-        )
-        data[key] = section
-        if section.get("enabled") and isinstance(data.get(other), dict):
-            data[other]["enabled"] = False      # one CAN mode at a time
-
-        try:
-            self.controller.save_configuration(path, data)
-        except (ValueError, OSError, TypeError, KeyError) as error:
-            QMessageBox.warning(self, "Save error", str(error))
-            return
-
-        # tell the unsaved-changes check that this section is now on disk
-        try:
-            snap = json.loads(self._saved_snapshot)
-            snap[key] = dict(section)
-            if section.get("enabled") and isinstance(snap.get(other), dict):
-                snap[other]["enabled"] = False
-            self._saved_snapshot = json.dumps(snap, sort_keys=True)
-        except (TypeError, ValueError):
-            pass
-
-        self.statusBar().showMessage(
-            f"{title} settings saved to {os.path.basename(path)}", 4000
-        )
 
     def on_save(self):
         # file created with New but not saved yet -> ask for the folder
@@ -1270,10 +1126,8 @@ def _apply_config(self, data):
             "  Save (Ctrl+S)  save; the arrow next to it gives Save As\n"
             "  Import  load settings from a JSON file\n\n"
             "Tree on the left\n"
-            "  Bus Configuration  Classic CAN and CAN FD settings\n"
-            "  Log Configuration  Filters, Triggers and Log Files\n"
-            "  Generate Config  checks the settings and creates "
-            "the configuration file"
+            "  Bus Configuration > Classic CAN  bus settings\n"
+            "  Log Configuration > Filters  configure Classic CAN filters"
         )
 
     # ------------------------------------------------------------------
@@ -1376,64 +1230,27 @@ def _apply_config(self, data):
             self.statusBar().showMessage("Transfer failed.", 8000)
             QMessageBox.warning(self, "Transfer failed", result.message)
 
-    def on_export(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Generate Config", "config_export.json", JSON_FILTER
-        )
-        if not path:
-            return
-
-        if not os.path.splitext(path)[1]:
-            path += ".json"
-
-        if self._write_json(path, mark_clean=False):
-            self.statusBar().showMessage(f"Exported: {path}", 3000)
-
-    # ------------------------------------------------------------------
-    # Device tree
-    # ------------------------------------------------------------------
     def _show_device_tree(self):
         self.new_tree.clear()
 
         bus_item = QTreeWidgetItem(["Bus Configuration"])
         classic_item = QTreeWidgetItem(["Classic CAN"])
         classic_item.setData(0, Qt.UserRole, "Classic CAN")
-        fd_item = QTreeWidgetItem(["CAN FD"])
-        fd_item.setData(0, Qt.UserRole, "CAN FD")
         bus_item.addChild(classic_item)
-        bus_item.addChild(fd_item)
-        self._bus_mode_items = (classic_item, fd_item)
-
         self.new_tree.addTopLevelItem(bus_item)
+
         log_item = QTreeWidgetItem(["Log Configuration"])
         log_item.addChild(QTreeWidgetItem(["Filters"]))
-        log_item.addChild(QTreeWidgetItem(["Triggers"]))
-        log_item.addChild(QTreeWidgetItem(["Log Files"]))
         self.new_tree.addTopLevelItem(log_item)
 
-        # Generate Config: a button-like item, it opens no page
-        preview_item = QTreeWidgetItem(["Generate Config"])
-        self.new_tree.addTopLevelItem(preview_item)
-
         bus_item.setExpanded(False)
-        self._refresh_mode_display()
+        log_item.setExpanded(False)
         self.new_tree.setVisible(True)
 
-    # ------------------------------------------------------------------
-    # Block leaving a page that has edits not applied/saved yet
-    # ------------------------------------------------------------------
     def _page_has_pending_changes(self):
-        current = getattr(self, "_current_page", None)
-        if current == "Classic CAN":
+        if getattr(self, "_current_page", None) == "Classic CAN":
             return self.classic_can_page.has_pending_changes()
-        if current == "CAN FD":
-            return self.canfd_page.has_pending_changes()
-        if current == "Triggers":
-            return self.log_pages.has_pending_triggers()
-        if current == "Log Files":
-            return self.log_pages.has_pending_logfiles()
         return False
-        
 
     def _confirm_leave_page(self):
         """True if it is OK to leave the open page."""
@@ -1465,16 +1282,13 @@ def _apply_config(self, data):
     
 
     # ------------------------------------------------------------------
-    # Editing switches (Filters / Triggers)
+    # Editing switch (Filters)
     # ------------------------------------------------------------------
     def _on_lock_toggled(self, page, on):
         self.log_pages.set_unlocked(page, on)
 
     def _show_lock_switch(self, page):
-        """page is 'filters' or 'triggers'. Anything else hides both."""
         self.filters_switch.setVisible(page == "filters")
-        self.triggers_switch.setVisible(page == "triggers")
-
 
     def on_tree_item_clicked(self, item, column):
         if item.childCount() > 0:
@@ -1482,17 +1296,6 @@ def _apply_config(self, data):
             return
 
         name = item.data(0, Qt.UserRole) or item.text(0)
-
-        if name == "Generate Config":
-            if not self._confirm_leave_page():
-                self._reselect_current_page()
-                return
-            self.on_export()
-            # keep the highlight on the page that is still open
-            self._reselect_current_page()
-            if getattr(self, "_current_page", None) is None:
-                self.new_tree.clearSelection()
-            return
 
         # edits on the open page not applied/saved yet?
         if not self._confirm_leave_page():
@@ -1506,7 +1309,6 @@ def _apply_config(self, data):
             self._show_lock_switch(page) 
             self.content_stack.setVisible(True)
             self.content_stack.setCurrentWidget(self.log_pages)
-            self.log_pages.show_page(page)
             return
 
         if name == "Classic CAN":
@@ -1518,16 +1320,6 @@ def _apply_config(self, data):
             self.content_stack.setCurrentWidget(self.classic_can_page)
             return
 
-        if name == "CAN FD":
-            self._current_page = name
-            self.title_label.setText("CAN FD")
-            self._show_lock_switch(None)    
-            self.canfd_page.load_from_parent()
-            self.content_stack.setVisible(True)
-            self.content_stack.setCurrentWidget(self.canfd_page)
-            return
-
-  
     # ------------------------------------------------------------------
     # Theme
     # ------------------------------------------------------------------
@@ -1669,8 +1461,7 @@ def _apply_config(self, data):
         self.title_label.setStyleSheet(
             f"color: {c['text_primary']};"
         )
-        for switch in (self.filters_switch, self.triggers_switch):
-            switch.set_colors(c['accent_blue'], c['btn_border'], "#FFFFFF")
+        self.filters_switch.set_colors(c['accent_blue'], c['btn_border'], "#FFFFFF")
         
 
         
@@ -1784,4 +1575,3 @@ def _apply_config(self, data):
         self._refresh_toolbar_theme(c)
         self.log_pages.set_theme(c)
         self.classic_can_page.set_theme(c)
-        self.canfd_page.set_theme(c)

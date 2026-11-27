@@ -150,10 +150,10 @@ class HomePage(QWidget):
         self.apply_theme()
 
     # ECUs on the animated CAN bus (right side of the page)
-    _NODES = ("ECM", "ABS", "TCM", "BCM", "LOGGER")
+    _NODES = ("ECM", "ABS", "TCM", "BCM", "SkiDrive")
 
     # one packet at a time, in this order: (from node, to node)
-    # node numbers follow _NODES: 0=ECM 1=ABS 2=TCM 3=BCM 4=LOGGER
+    # node numbers follow _NODES: 0=ECM 1=ABS 2=TCM 3=BCM 4=SkiDrive
     _ROUTES = (
         (0, 4),
         (2, 1),
@@ -292,7 +292,7 @@ class HomePage(QWidget):
         p.setFont(QFont(FONT_FAMILY, 10, QFont.DemiBold))
         for i, label in enumerate(self._NODES):
             rect = QRectF(xs[i] - nw / 2, node_y[i] - nh / 2, nw, nh)
-            is_logger = label == "LOGGER"
+            is_logger = label == "SkiDrive"
             p.setBrush(QColor(c["bg_panel"]))
             p.setPen(QPen(teal if is_logger else QColor(c["border"]), 2))
             p.drawRoundedRect(rect, 12, 12)
