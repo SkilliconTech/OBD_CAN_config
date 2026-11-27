@@ -34,11 +34,10 @@ def validate_rule(rule):
         "id_range": "id_start id_end",
         "id_mask": "match_id mask",
     }[kind]
-    check_keys(rule, "filter_id enabled type extended_id " + extra, "Filter")
+    check_keys(rule, "filter_id type extended_id " + extra, "Filter")
     require(isinstance(rule["filter_id"], str)
             and 1 <= len(rule["filter_id"].strip()) <= 64,
             "Filter name must have 1-64 characters")
-    check_bool(rule["enabled"], "Filter enabled")
     check_bool(rule["extended_id"], "Extended ID")
     ext = rule["extended_id"]
     if kind == "id_list":
