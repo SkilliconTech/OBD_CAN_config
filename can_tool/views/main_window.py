@@ -485,6 +485,7 @@ class ConfigurationTool(QMainWindow):
         self.target_selector.send_requested.connect(self.on_send_to_logger)
         topbar.addWidget(self.target_selector)
         topbar.addSpacing(10)
+
         # Home button: the only button at the right end of the toolbar
         self.home_button = HomeButton()
         self.home_button.clicked.connect(self.home_requested)
@@ -1334,7 +1335,104 @@ class ConfigurationTool(QMainWindow):
             "  Generate Config  checks the settings and creates "
             "the configuration file"
         )
-        
+
+    # ------------------------------------------------------------------
+    # Logger connection (same as OBD Config)
+    # ------------------------------------------------------------------
+    def on_drive_changed(self, drive):
+        if drive.startswith(MTP_PREFIX):          # logger on USB: sent with the Upload button
+            self.mtp_device = drive[len(MTP_PREFIX):]
+            self.logger_drive = ""
+        else:                                     # card reader drive letter: written after every change
+            self.mtp_device = ""
+            self.logger_drive = drive
+        self._last_synced = None
+        if self.logger_drive:
+            self._drive_timer.start()
+            self._sync_logger_drive()
+        else:
+            self._drive_timer.stop()
+
+    def _sync_logger_drive(self):
+        """Card reader drive chosen: keep config.json in its CONFIG folder up to date."""
+        if not self.logger_drive:
+            return
+        snapshot = self._snapshot()
+        if snapshot is None:                      # values are half typed or not valid yet
+            self.statusBar().showMessage(
+                "Logger not updated yet: finish or fix the values first.", 2000)
+            return
+        if snapshot == self._last_synced:         # nothing new to write
+            return
+        try:
+            data = self._collect_config()
+            folder = os.path.join(self.logger_drive, CONFIG_FOLDER)
+            if not os.path.isdir(folder):
+                raise OSError(
+                    f'The "{CONFIG_FOLDER}" folder was not found on {self.logger_drive}.')
+            path = os.path.join(folder, "config.json")
+            self.controller.save_configuration(path, data)
+        except ValueError as error:               # errors in the config: nothing is written
+            self.statusBar().showMessage(f"Logger not updated: {error}", 6000)
+            self._last_synced = snapshot
+            return
+        except OSError as error:
+            self.statusBar().showMessage(f"Could not write to the logger: {error}", 6000)
+            return
+        self._last_synced = snapshot
+        self.statusBar().showMessage(
+            f"Saved to the logger: {os.path.normpath(path)}", 6000)
+
+    def on_send_to_logger(self):
+        """Send config.json to the logger's SD card over USB, then check it."""
+        drive = self.target_selector.current_drive()
+        if drive.startswith(MTP_PREFIX):
+            self.mtp_device = drive[len(MTP_PREFIX):]
+        if not self.mtp_device:
+            QMessageBox.information(
+                self, "No logger selected",
+                "Select a USB logger in the Device dropdown, then click Upload.")
+            return
+        if not self.target_selector.storage_ready():
+            QMessageBox.warning(
+                self, "SD card not available",
+                f'The logger "{self.mtp_device}" is connected, but its SD card '
+                "is not available yet.\n\n"
+                "The logger only shows the SD card after logging stops and "
+                "buffered data is saved. Stop logging on the device, wait a "
+                "moment, then try Upload again.")
+            return
+        if not self._confirm_leave_page():        # edits on the open page not applied yet
+            return
+        try:
+            data = self._collect_config()
+            validate_complete_config(data)
+        except ValueError as error:               # errors in the config: block the upload
+            QMessageBox.warning(self, "Cannot send yet", str(error))
+            return
+        answer = QMessageBox.question(
+            self, "Send to logger",
+            f'Send the current config.json to "{self.mtp_device}"?',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if answer != QMessageBox.Yes:
+            return
+        self.target_selector.set_sending(True)
+        self.statusBar().showMessage(f"Sending config.json to {self.mtp_device} ...")
+        task = MtpSendTask(self.mtp_device, json.dumps(data, indent=4))
+        task.signals.done.connect(self._on_send_done)
+        self._send_task = task
+        QThreadPool.globalInstance().start(task)
+
+    def _on_send_done(self, result):
+        self.target_selector.set_sending(False)
+        self.target_selector.show_result(result.ok)
+        if result.ok:
+            self.statusBar().showMessage(result.message, 8000)
+            QMessageBox.information(self, "Transfer complete", result.message)
+        else:
+            self.statusBar().showMessage("Transfer failed.", 8000)
+            QMessageBox.warning(self, "Transfer failed", result.message)
+                
     def on_export(self):
         path, _ = QFileDialog.getSaveFileName(
             self, "Generate Config", "config_export.json", JSON_FILTER
