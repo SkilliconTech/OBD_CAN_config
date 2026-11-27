@@ -136,27 +136,6 @@ CLASSIC_BITRATES = {
 }
 CLASSIC_SJW = ("1", "2", "3", "4")
 
-
-def _check_pair(settings, bitrate_key, sp_key, table, label):
-    """Check a bitrate and its sampling point together."""
-    if bitrate_key in settings:
-        bitrate = settings[bitrate_key]
-        require(isinstance(bitrate, str) and bitrate in table,
-                f"{label} bitrate '{bitrate}' is not supported. "
-                f"Allowed values: {', '.join(table)}")
-
-    if sp_key in settings:
-        sp = settings[sp_key]
-        if bitrate_key in settings:
-            allowed = table[settings[bitrate_key]]
-        else:
-            allowed = tuple({s for sps in table.values() for s in sps})
-        require(isinstance(sp, str) and sp in allowed,
-                f"{label} sampling point '{sp}' is not valid"
-                f"{' for ' + str(settings[bitrate_key]) if bitrate_key in settings else ''}. "
-                f"Allowed: {', '.join(allowed)}")
-
-
 def validate_classic_can(settings):
     require(isinstance(settings, dict),
             "Classic CAN settings must be a JSON object.")
