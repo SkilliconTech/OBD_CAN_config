@@ -137,19 +137,8 @@ CLASSIC_BITRATES = {
 CLASSIC_SJW = ("1", "2", "3", "4")
 
 # older files may contain "80.00%" for arbitration, so both are accepted
-CANFD_ARBITRATION = {
-    "500 kbits/s": ("80%", "80.00%"),
-    "1000 kbits/s": ("80%", "80.00%"),
-}
-CANFD_DATA = {
-    "500 kbits/s": ("80.00%",),
-    "1000 kbits/s": ("80.00%",),
-    "2000 kbits/s": ("80.00%",),
-    "4000 kbits/s": ("80.00%",),
-    "5000 kbits/s": ("75.00%",),
-    "8000 kbits/s": ("80.00%",),
-}
-CANFD_SJW = tuple(str(i) for i in range(1, 17))
+
+
 
 
 def _check_choice(settings, key, allowed, label):
@@ -192,15 +181,6 @@ def validate_classic_can(settings):
     if "enabled" in settings:
         check_bool(settings["enabled"], "Classic CAN enabled")
 
-def validate_can_mode(classic, canfd):
-    """The logger has one CAN channel: only one mode may be enabled."""
-    classic_on = isinstance(classic, dict) and classic.get("enabled") is True
-    fd_on = isinstance(canfd, dict) and canfd.get("enabled") is True
-    require(
-        not (classic_on and fd_on),
-        "Classic CAN and CAN FD are both enabled. This logger has one CAN "
-        "channel, so only one mode can be active. Set one of them to Disable."
-    )
 
 def validate_complete_config(data):
     """
