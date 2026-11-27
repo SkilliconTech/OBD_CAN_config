@@ -138,18 +138,6 @@ class ConfigurationTool(QMainWindow):
     @classic_can_settings.setter
     def classic_can_settings(self, settings):
         self.controller.update_classic_can(settings)
-        self._refresh_mode_display()
-
-    
-    @property
-    def canfd_settings(self):
-        return self.controller.get_canfd()
-
-    @canfd_settings.setter
-    def canfd_settings(self, settings):
-        self.controller.update_canfd(settings)
-        self._refresh_mode_display()
-
 
     def __init__(self):
         super().__init__()
@@ -160,12 +148,8 @@ class ConfigurationTool(QMainWindow):
         self.dark_mode = False
         self.current_file_path = None      # file used by Save / Ctrl+S
         # Classic CAN runtime configuration/state
-        self.classic_can_settings = {
-            "bitrate": "500.000 kbits/s",
-            "sampling_point": "75%",
-            "sjw": "1",
-            "enabled": False,
-        }
+        self.classic_can_settings = dict(DEFAULT_CLASSIC_CAN)
+        
         self.classic_can_default_settings = dict(
             self.classic_can_settings
         )
@@ -176,7 +160,6 @@ class ConfigurationTool(QMainWindow):
             self.classic_can_settings
         )
         self.classic_can_enabled = False
-        self.canfd_settings = self.controller.get_canfd()
 
         self.setWindowTitle("Configuration Tool")
         self.resize(1400, 950)
