@@ -31,8 +31,6 @@ class FilterDialog(QDialog):
 
         form = QFormLayout(self)
         self.name_edit = QLineEdit(rule["filter_id"])
-        self.enabled_box = QCheckBox("Enabled")
-        self.enabled_box.setChecked(rule["enabled"])
         self.ext = QCheckBox("Extended (29-bit) identifier")
         self.ext.setChecked(rule["extended_id"])
         self.kind = make_combo([
@@ -44,7 +42,7 @@ class FilterDialog(QDialog):
         self.first, self.second = QLineEdit(), QLineEdit()
         self.label1, self.label2 = QLabel(), QLabel()
 
-        for label, w in [("Name", self.name_edit), ("", self.enabled_box),
+        for label, w in [("Name", self.name_edit),
                          ("", self.ext), ("Type", self.kind),
                          (self.label1, self.first), (self.label2, self.second)]:
             form.addRow(label, w)
@@ -85,7 +83,6 @@ class FilterDialog(QDialog):
         kind = self.kind.currentData()
         result = dict(
             filter_id=self.name_edit.text().strip(),
-            enabled=self.enabled_box.isChecked(),
             type=kind,
             extended_id=self.ext.isChecked(),
         )
