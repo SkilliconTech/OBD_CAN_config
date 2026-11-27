@@ -129,8 +129,7 @@ def validate_log_config(data):
     check_keys(filters, "mode combine rules", "Filters")
     require(filters["mode"] in ("all", "matching") and filters["combine"] == "or",
             "Invalid filter mode/combination")
-    require(isinstance(filters["rules"], list) and len(filters["rules"]) <= 64,
-            "Maximum 64 filters")
+    require(isinstance(filters["rules"], list), "Filters must be a list")
     names = set()
     for rule in filters["rules"]:
         validate_rule(rule)

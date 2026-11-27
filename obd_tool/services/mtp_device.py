@@ -203,15 +203,16 @@ def _result_from_output(device, code, output, error):
     return TransferResult(False, f"The transfer failed (exit code {code}): {problem}")
 
 
-def send_config(device_name, text, timeout_s=TRANSFER_TIMEOUT_S):
+def send_config(device_name, text, timeout_s=TRANSFER_TIMEOUT_S, max_bytes=None):
     """Copies `text` to <device>/SD card/config.json, replacing any file there, and reads it
     back to check the SHA-256. Blocks until done: call it from a background thread."""
     if sys.platform != "win32":
         return TransferResult(False, "Sending to the logger over USB works on Windows only.")
     data = text.encode("utf-8")
-    if len(data) > R.MAX_FILE_BYTES:
+    limit = max_bytes or R.MAX_FILE_BYTES
+    if len(data) > limit:
         return TransferResult(False, f"config.json is {len(data)} bytes. The logger "
-                                     f"accepts at most {R.MAX_FILE_BYTES} bytes.")
+                                     f"accepts at most {limit} bytes.")
     digest = hashlib.sha256(data).hexdigest().upper()
     with tempfile.TemporaryDirectory(prefix="obdsend_") as folder:
         source = os.path.join(folder, CONFIG_NAME)

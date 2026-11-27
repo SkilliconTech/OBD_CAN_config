@@ -23,11 +23,13 @@ class MtpScanTask(QRunnable):
 class MtpSendTask(QRunnable):
     """Sends config.json to one logger and checks it. done -> TransferResult."""
 
-    def __init__(self, device_name, text):
+    def __init__(self, device_name, text, max_bytes=None):
         super().__init__()
         self.signals = _Signals()
         self.device_name = device_name
         self.text = text
+        self.max_bytes = max_bytes          # None = the normal limit
 
     def run(self):
-        self.signals.done.emit(send_config(self.device_name, self.text))
+        self.signals.done.emit(
+            send_config(self.device_name, self.text, max_bytes=self.max_bytes))

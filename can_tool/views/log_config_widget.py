@@ -579,9 +579,6 @@ class LogConfigWidget(QStackedWidget):
         parent = self.window()
 
         if index is None:
-            if len(self.rules) >= 64:
-                QMessageBox.warning(parent, "Limit", "Maximum 64 filters")
-                return
             n = 1
             while any(r["filter_id"] == f"F{n}" for r in self.rules):
                 n += 1

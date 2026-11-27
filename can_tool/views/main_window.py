@@ -10,7 +10,7 @@ from obd_tool.views.mtp_tasks import MtpSendTask
 from obd_tool.views.target_selector import TargetSelector
 from can_tool.services.config_validator import validate_complete_config
 
-CONFIG_FOLDER = getattr(_logger_rules, "CONFIG_FOLDER", "CONFIG")   # folder on the logger's SD card
+CAN_MAX_FILE_BYTES = 1024 * 1024        # largest config.json for CAN Config: 1 MB
 
 from PySide6.QtGui import (
     QFont,
@@ -1366,10 +1366,12 @@ class ConfigurationTool(QMainWindow):
             return
         try:
             data = self._collect_config()
-            folder = os.path.join(self.logger_drive, CONFIG_FOLDER)
+            if len(json.dumps(data, indent=4).encode("utf-8")) > CAN_MAX_FILE_BYTES:
+                raise ValueError("config.json is larger than 1 MB.")
+            folder = os.path.join(self.logger_drive, _logger_rules.CONFIG_FOLDER)
             if not os.path.isdir(folder):
                 raise OSError(
-                    f'The "{CONFIG_FOLDER}" folder was not found on {self.logger_drive}.')
+                    f'The "{_logger_rules.CONFIG_FOLDER}" folder was not found on {self.logger_drive}.')
             path = os.path.join(folder, "config.json")
             self.controller.save_configuration(path, data)
         except ValueError as error:               # errors in the config: nothing is written
@@ -1418,7 +1420,8 @@ class ConfigurationTool(QMainWindow):
             return
         self.target_selector.set_sending(True)
         self.statusBar().showMessage(f"Sending config.json to {self.mtp_device} ...")
-        task = MtpSendTask(self.mtp_device, json.dumps(data, indent=4))
+        task = MtpSendTask(self.mtp_device, json.dumps(data, indent=4),
+                           max_bytes=CAN_MAX_FILE_BYTES)
         task.signals.done.connect(self._on_send_done)
         self._send_task = task
         QThreadPool.globalInstance().start(task)
@@ -1432,7 +1435,7 @@ class ConfigurationTool(QMainWindow):
         else:
             self.statusBar().showMessage("Transfer failed.", 8000)
             QMessageBox.warning(self, "Transfer failed", result.message)
-                
+
     def on_export(self):
         path, _ = QFileDialog.getSaveFileName(
             self, "Generate Config", "config_export.json", JSON_FILTER

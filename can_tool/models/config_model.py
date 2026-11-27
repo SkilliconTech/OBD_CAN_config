@@ -14,7 +14,7 @@ def default_log_config():
         },
         "logging": {
             "formats": ["asc", "mf4"],
-            "file_split_size_bytes": 104857600,
+            "file_split_size_bytes": 1048576,
             "file_split_time_seconds": 1800,
             "split_policy": "first_limit_reached",
             "on_sd_full": "stop",
