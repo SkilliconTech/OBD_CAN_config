@@ -136,21 +136,6 @@ CLASSIC_BITRATES = {
 }
 CLASSIC_SJW = ("1", "2", "3", "4")
 
-# older files may contain "80.00%" for arbitration, so both are accepted
-
-
-
-
-def _check_choice(settings, key, allowed, label):
-    # a missing value is allowed: the app fills in the default
-    if key not in settings:
-        return
-    value = settings[key]
-    ok = (isinstance(value, (str, int)) and not isinstance(value, bool)
-          and str(value) in allowed)
-    require(ok, f"{label}: '{value}' is not valid. "
-                f"Allowed values: {', '.join(allowed)}")
-
 
 def _check_pair(settings, bitrate_key, sp_key, table, label):
     """Check a bitrate and its sampling point together."""
