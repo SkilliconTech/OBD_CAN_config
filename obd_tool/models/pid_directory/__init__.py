@@ -9,7 +9,7 @@ from obd_tool.models.pid_directory.data_pids import DATA_PIDS
 from obd_tool.models.pid_directory.identifiers import MODE_05, MODE_06, MODE_08, MODE_09
 
 _ENTRIES = {
-    "01": tuple(e for e in DATA_PIDS if e.ident != "02"),   # $02 is Mode $02 only
+    "01": tuple(e for e in DATA_PIDS if e.ident != "02"),   # 02 is Mode 02 only
     "02": DATA_PIDS,
     "05": MODE_05,
     "06": MODE_06,
