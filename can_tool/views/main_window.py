@@ -300,38 +300,20 @@ class ConfigurationTool(QMainWindow):
         self.new_button.setObjectName("newButton")
         self.new_button.clicked.connect(self.on_new)
 
-        self.save_button = QPushButton("Save")
-        self.save_button.setObjectName("saveButton")
-        self.save_button.clicked.connect(self.on_save)
+        self.save_button = QPushButton("Export")          # label change
+        self.save_button.setObjectName("saveButton")      # keep objectName if stylesheet uses it
+        self.save_button.setToolTip("Export configuration to a file")
+        self.save_button.clicked.connect(self.on_export)  # NEW method (always asks for path)
 
-        # small arrow next to Save -> opens the "Save As..." dropdown
-        self.save_arrow_button = QPushButton("▾")
-        self.save_arrow_button.setObjectName("saveArrowButton")
-        self.save_arrow_button.setFixedWidth(30)
-        self.save_arrow_button.setToolTip("More save options")
-        self.save_arrow_button.clicked.connect(self._show_save_menu)
+        # DELETE: save_arrow_button, _save_menu, and everything that builds the split button
 
-        self._save_menu = QMenu(self)
-        self._save_menu.addAction(self.act_save_as)
-
-        self.import_button = QPushButton("Import")
-        self.import_button.setObjectName("importButton")
-        self.import_button.clicked.connect(self.on_import)
-
-        for button in (self.new_button, self.save_button,
-                       self.save_arrow_button, self.import_button):
-            button.setCursor(Qt.PointingHandCursor)
-            button.setMinimumHeight(40)
-
-        # Save + arrow are glued together so they look like one split button
-        save_group = QHBoxLayout()
-        save_group.setSpacing(0)
-        save_group.addWidget(self.save_button, 1)
-        save_group.addWidget(self.save_arrow_button)
+        for button in (self.new_button, self.save_button, self.import_button):
+        button.setCursor(Qt.PointingHandCursor)
+        button.setMinimumHeight(40)
 
         button_row.addWidget(self.new_button)
         button_row.addWidget(self.import_button)
-        button_row.addLayout(save_group)
+        button_row.addWidget(self.save_button)            # plain button, no arrow group
 
         imported_layout.addLayout(button_row)
         sidebar_layout.addWidget(self.imported_section, 0)
@@ -560,13 +542,11 @@ class ConfigurationTool(QMainWindow):
         self.act_open.setShortcut("Ctrl+O")
         self.act_open.triggered.connect(self.on_open)
 
-        self.act_save = QAction("Save", self)
+        self.act_save = QAction("Save", self)          # keep name "Save" for Ctrl+S semantics
         self.act_save.setShortcut("Ctrl+S")
         self.act_save.triggered.connect(self.on_save)
 
-        self.act_save_as = QAction("Save As...", self)
-        self.act_save_as.setShortcut("Ctrl+Shift+S")
-        self.act_save_as.triggered.connect(self.on_save_as)
+        # DELETE the whole act_save_as block (action + shortcut + connect)
 
         self.act_import = QAction("Import", self)
         self.act_import.triggered.connect(self.on_import)
@@ -959,21 +939,36 @@ class ConfigurationTool(QMainWindow):
             self._show_device_tree()
             self.statusBar().showMessage(f"Opened: {path}", 3000)
 
-    def on_save(self):
-        # file created with New but not saved yet -> ask for the folder
-        if self.current_file_path is None and self._draft_item is not None:
-            self._save_draft()
-            return
-        
-        # First time: no path yet, so ask for it. After that: save silently.
-        if self.current_file_path is None:
-            self.on_save_as()
-            return
+    def on_export(self):
+     """Always show a file dialog and write the config there."""
+     # Draft that was never saved: same “choose folder” flow is fine
+     if self.current_file_path is None and self._draft_item is not None:
+        self._save_draft()
+        return
 
-        if self._write_json(self.current_file_path):
-            self.statusBar().showMessage(
-                f"Saved: {self.current_file_path}", 3000
-            )
+     if self.current_file_path:
+        start = self.current_file_path
+     elif self._last_folder:
+        start = os.path.join(self._last_folder, "config.json")
+     else:
+        start = "config.json"
+
+     path, _ = QFileDialog.getSaveFileName(
+        self, "Export configuration", start, JSON_FILTER
+     )
+     if not path:
+        return
+
+     if not os.path.splitext(path)[1]:
+        path += ".json"
+     path = os.path.normpath(os.path.abspath(path))
+
+     if self._write_json(path):
+        self.current_file_path = path
+        self._last_folder = os.path.dirname(path)
+        self._update_title()
+        self._add_imported_file(path)
+        self.statusBar().showMessage(f"Exported: {path}", 3000)
 
     def on_save_as(self):
         # New file that was never saved: same "choose folder" dialog
@@ -1091,12 +1086,6 @@ class ConfigurationTool(QMainWindow):
                 f"Removed from list: {name}", 3000
             )
 
-    def _show_save_menu(self):
-        # open the dropdown just below the Save button
-        pos = self.save_button.mapToGlobal(
-            self.save_button.rect().bottomLeft()
-        )
-        self._save_menu.exec(pos)
 
     def on_import(self):
         path, _ = QFileDialog.getOpenFileName(
